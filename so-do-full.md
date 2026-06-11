@@ -1,620 +1,663 @@
-# AI Social Commerce OS V3 — Sơ đồ hệ thống đầy đủ
+# AI Commerce OS — Sơ đồ hệ thống đầy đủ
 
-> Hệ thống bán hàng AI tự động đa nền tảng  
-> NestJS API + Next.js Web + 16 AI Agents + PostgreSQL + Redis + Qdrant + MinIO
+> **Stack:** NestJS API · Next.js 16 Web · 20 AI Agents · PostgreSQL · Redis · Qdrant · MinIO · Docker · PM2  
+> **Phiên bản:** V3 · Multi-channel · Self-hosted VPS
 
 ---
 
-## I. SƠ ĐỒ KIẾN TRÚC KỸ THUẬT
+## I. KIẾN TRÚC TỔNG QUAN
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                            NGƯỜI DÙNG / BROWSER                              │
+└───────────────┬──────────────────────────────────────────────────────────────┘
+                │ HTTPS :443 / HTTP :80
+                ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                           NGINX REVERSE PROXY                                │
+│                        nginx:alpine  (Port 80/443)                           │
+│                                                                              │
+│  /          → Web UI  (Next.js :3003)                                        │
+│  /api/*     → NestJS API  (:3002)                                            │
+│  /n8n/      → N8N Workflow  (:5678)                                          │
+│  /minio/    → MinIO Console  (:9001)                                         │
+│  /chat/     → Open WebUI  (:3000)                                            │
+└───┬───────────────┬──────────────────────────────────────────────────────────┘
+    │               │
+    ▼               ▼
+┌────────┐   ┌─────────────────────────────────────────────────────────────────┐
+│NEXT.JS │   │                     NESTJS API  (Port 3002)                     │
+│  WEB   │   │              apps/api/  — TypeScript · TypeORM                  │
+│ :3003  │   │                   Swagger UI: /api/docs                         │
+│        │◄──│   WebSocket Gateway (Socket.IO) — realtime events               │
+│20 pages│   │   JWT Auth + RBAC (admin/manager/staff/viewer)                  │
+└────────┘   └──────────────┬──────────────────────────────────────────────────┘
+                             │
+          ┌──────────────────┼──────────────────────┐
+          ▼                  ▼                       ▼
+    ┌──────────┐      ┌──────────┐           ┌──────────────┐
+    │PostgreSQL│      │  Redis   │           │    Qdrant    │
+    │  :5432   │      │  :6379   │           │  :6333/6334  │
+    │ TypeORM  │      │ Cache/   │           │ Vector DB    │
+    │ 30 tables│      │ Session  │           │ AI Memory    │
+    └──────────┘      └──────────┘           └──────────────┘
+          ▼
+    ┌──────────┐      ┌──────────┐           ┌──────────────┐
+    │  MinIO   │      │  Ollama  │           │     N8N      │
+    │  :9000   │      │  :11434  │           │   :5678      │
+    │  S3 File │      │  LLM AI  │           │  Workflow    │
+    │ Storage  │      │(qwen2.5) │           │ Automation   │
+    └──────────┘      └──────────┘           └──────────────┘
+```
+
+---
+
+## II. FRONTEND — NEXT.JS 16 WEB
+
+```
+apps/web/  (Port 3003 — PM2: commerce-web)
+│
+├── src/app/
+│   ├── (dashboard)/          ← Route group có layout sidebar
+│   │   ├── page.tsx          → /         Dashboard KPI tổng quan
+│   │   ├── products/         → /products  Quản lý sản phẩm
+│   │   ├── orders/           → /orders    Quản lý đơn hàng
+│   │   ├── customers/        → /customers Quản lý khách hàng
+│   │   ├── leads/            → /leads     Leads & tiềm năng
+│   │   ├── categories/       → /categories Danh mục
+│   │   ├── brands/           → /brands    Thương hiệu
+│   │   ├── inventory/        → /inventory Tồn kho
+│   │   ├── payments/         → /payments  Thanh toán
+│   │   ├── campaigns/        → /campaigns Chiến dịch marketing
+│   │   ├── suppliers/        → /suppliers Nhà cung cấp
+│   │   ├── dropship/         → /dropship  Dropshipping
+│   │   ├── affiliates/       → /affiliates Affiliate portal
+│   │   ├── marketplace/      → /marketplace Shopee/Lazada/TikTok
+│   │   ├── agents/           → /agents    AI Agents dashboard
+│   │   ├── analytics/        → /analytics Phân tích & báo cáo
+│   │   ├── users/            → /users     Quản lý user (admin)
+│   │   └── settings/         → /settings  Cài đặt logo/branding
+│   ├── login/                → /login     Đăng nhập JWT
+│   └── api/brand/upload/     → API upload logo (không cần rebuild)
+│
+├── src/components/
+│   ├── Sidebar.tsx           ← Navigation sidebar responsive
+│   ├── Logo.tsx              ← Logo động (fetch từ API, fallback emoji)
+│   ├── PageHeader.tsx        ← Header mỗi trang
+│   ├── DataTable.tsx         ← Bảng dữ liệu tái sử dụng
+│   ├── StatCard.tsx          ← Card KPI
+│   └── Modal.tsx             ← Modal dialog
+│
+├── src/config/brand.ts       ← Cấu hình tên/logo/màu toàn app
+├── src/lib/auth.tsx          ← Context JWT + RBAC client
+└── src/lib/api.ts            ← HTTP client gọi API
+```
+
+**Rewrite Proxy:** `/api/*` → `http://localhost:3002/api/*` (tránh CORS)
+
+---
+
+## III. BACKEND — NESTJS API
+
+```
+apps/api/  (Port 3002 — PM2: commerce-api)
+│
+├── src/modules/
+│   │
+│   ├── auth/                 JWT login · register · RBAC guard
+│   ├── users/                CRUD users · phân quyền 4 role
+│   │
+│   ├── ── CORE COMMERCE ─────────────────────────────────────
+│   ├── products/             CRUD sản phẩm · slug · search
+│   ├── categories/           Danh mục · cây phân cấp
+│   ├── brands/               Thương hiệu
+│   ├── orders/               Đơn hàng · trạng thái · items
+│   ├── customers/            Khách hàng · lịch sử mua
+│   ├── leads/                Leads · phễu bán hàng
+│   ├── inventory/            Tồn kho · cảnh báo
+│   ├── payments/             Thanh toán · đối soát
+│   ├── campaigns/            Chiến dịch marketing
+│   │
+│   ├── ── PORTALS ────────────────────────────────────────────
+│   ├── suppliers/            Nhà cung cấp + supplier-products
+│   ├── dropship/             Đơn dropship · tự động đặt hàng
+│   ├── affiliate-portal/     Affiliate đăng ký · theo dõi
+│   ├── marketplace/          Sync Shopee · Lazada · TikTok Shop
+│   │   ├── shopee.service    Shopee Open API
+│   │   ├── lazada.service    Lazada API
+│   │   └── tiktok.service    TikTok Shop API
+│   │
+│   ├── ── AI & DATA ──────────────────────────────────────────
+│   ├── ai/                   Chat với Ollama (qwen2.5:7b)
+│   ├── ai-memory/            Lưu/truy vấn memory AI (Qdrant)
+│   ├── rag/                  Retrieval-Augmented Generation
+│   ├── affiliate-intelligence/ Phân tích hiệu quả affiliate AI
+│   ├── content-factory/      Sinh nội dung hàng loạt
+│   ├── analytics/            KPI · doanh thu · báo cáo
+│   ├── workflows/            N8N workflow triggers
+│   │
+│   ├── gateway/              WebSocket (Socket.IO) realtime
+│   │
+│   └── agents/               ── 20 AI AGENTS ────────────────
+│       ├── master/           Điều phối toàn bộ agents (Cron 1h)
+│       ├── trend/            Phân tích xu hướng thị trường
+│       ├── trend-predictor/  Dự đoán xu hướng tương lai
+│       ├── content/          Sinh nội dung sản phẩm tự động
+│       ├── publisher/        Đăng bài đa kênh tự động
+│       ├── seo/              Tối ưu SEO · sinh bài viết
+│       ├── video/            Tạo video sản phẩm
+│       ├── video-optimizer/  Tối ưu video cho từng nền tảng
+│       ├── price/            Giám sát giá đối thủ
+│       ├── repricing/        Tự động điều chỉnh giá
+│       ├── competitor-monitor/ Theo dõi đối thủ cạnh tranh
+│       ├── crm/              Chăm sóc khách hàng tự động
+│       ├── lead-hunter/      Săn leads từ mạng xã hội
+│       ├── sales/            Tự động hóa quy trình bán hàng
+│       ├── affiliate/        Quản lý affiliate tự động
+│       ├── demand-forecaster/ Dự báo nhu cầu tồn kho
+│       ├── segmentation/     Phân khúc khách hàng AI
+│       ├── knowledge/        Đồng bộ knowledge base
+│       ├── email/            Email marketing tự động
+│       └── telegram/         Thông báo Telegram
+│
+├── src/database/
+│   └── entities/             30 TypeORM entities
+│       ├── user, product, category, brand
+│       ├── order, order-item, customer, lead
+│       ├── inventory, payment, campaign
+│       ├── supplier, supplier-product
+│       ├── dropship-order, dropship-product
+│       ├── affiliate, affiliate-partner
+│       ├── affiliate-click, affiliate-conversion, commission
+│       ├── content, seo-article, video-job
+│       ├── email-campaign, workflow
+│       ├── agent-config, agent-log
+│       ├── ai-memory, knowledge, price-alert
+│       └── (n8n sử dụng schema riêng)
+│
+└── src/main.ts               Bootstrap · Swagger · CORS · Validation
+```
+
+---
+
+## IV. 20 AI AGENTS — CHI TIẾT
+
+| # | Agent | Cron | Chức năng |
+|---|-------|------|-----------|
+| 1 | **Master Agent** | Mỗi 1 giờ | Điều phối toàn bộ agents, đánh giá KPI, phân công tác vụ |
+| 2 | **Trend Agent** | Thủ công/Cron | Phân tích xu hướng sản phẩm đang hot trên thị trường |
+| 3 | **Trend Predictor** | Cron | Dự đoán xu hướng 7-30 ngày tới bằng AI |
+| 4 | **Content Agent** | Cron | Sinh mô tả sản phẩm, bài đăng MXH bằng Ollama LLM |
+| 5 | **Publisher Agent** | Cron | Tự động đăng bài lên Shopee/Lazada/TikTok/Facebook |
+| 6 | **SEO Agent** | Cron | Tạo bài viết SEO, tối ưu từ khoá, meta tags |
+| 7 | **Video Agent** | Thủ công | Tạo script video sản phẩm từ mô tả |
+| 8 | **Video Optimizer** | Cron | Tối ưu video cho từng nền tảng (tỉ lệ, caption) |
+| 9 | **Price Agent** | Cron | Theo dõi giá sản phẩm tương tự trên thị trường |
+| 10 | **Repricing Agent** | Cron | Tự động điều chỉnh giá bán theo chiến lược |
+| 11 | **Competitor Monitor** | Cron | Giám sát hoạt động của đối thủ cạnh tranh |
+| 12 | **CRM Agent** | Cron | Gửi tin nhắn chăm sóc, nhắc nhở, upsell khách hàng |
+| 13 | **Lead Hunter** | Cron | Tìm kiếm leads mới từ mạng xã hội & marketplace |
+| 14 | **Sales Agent** | Cron | Tự động hóa pipeline bán hàng, follow-up |
+| 15 | **Affiliate Agent** | Cron | Tính hoa hồng, phân tích hiệu quả affiliate |
+| 16 | **Demand Forecaster** | Cron | Dự báo nhu cầu để cảnh báo tồn kho |
+| 17 | **Segmentation Agent** | Cron | Phân khúc khách hàng theo hành vi mua |
+| 18 | **Knowledge Agent** | Thủ công | Đồng bộ dữ liệu vào Qdrant vector DB |
+| 19 | **Email Agent** | Cron | Gửi email marketing hàng loạt |
+| 20 | **Telegram Agent** | Event | Thông báo đơn hàng, cảnh báo, KPI qua Telegram |
+
+---
+
+## V. DATABASE LAYER
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        NGƯỜI DÙNG / BROWSER                         │
-│                    http://server:3003 (Web UI)                       │
-└────────────────────────────┬────────────────────────────────────────┘
-                             │ HTTP/HTTPS
-                             ▼
+│                    PostgreSQL 17  (Port 5432)                        │
+│                    Volume: postgres_data                             │
+│                                                                      │
+│  Schema: ai_commerce                                                 │
+│                                                                      │
+│  ┌─── COMMERCE ──────────────────────────────────────────────────┐  │
+│  │ products · categories · brands · inventory · price_alerts      │  │
+│  │ orders · order_items · payments                                │  │
+│  │ customers · leads                                              │  │
+│  │ campaigns · email_campaigns                                    │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+│  ┌─── PORTALS ───────────────────────────────────────────────────┐  │
+│  │ suppliers · supplier_products                                  │  │
+│  │ dropship_orders · dropship_products                            │  │
+│  │ affiliates · affiliate_partners                                │  │
+│  │ affiliate_clicks · affiliate_conversions · commissions         │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+│  ┌─── AI & CONTENT ──────────────────────────────────────────────┐  │
+│  │ contents · seo_articles · video_jobs                           │  │
+│  │ agent_configs · agent_logs                                     │  │
+│  │ ai_memories · knowledge_base                                   │  │
+│  │ workflows                                                      │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+│  ┌─── N8N (schema riêng) ────────────────────────────────────────┐  │
+│  │ n8n workflow data (DB: n8n)                                    │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────┐
+│   Redis 7       │  │  Qdrant latest  │  │      MinIO latest       │
+│   Port 6379     │  │  Port 6333/6334 │  │  Port 9000 (API)        │
+│                 │  │                 │  │  Port 9001 (Console)    │
+│  • Cache API    │  │  • Vector DB    │  │                         │
+│  • Session JWT  │  │  • AI Memory    │  │  • Ảnh sản phẩm         │
+│  • Rate limit   │  │  • RAG search   │  │  • Video                │
+│  • Pub/Sub      │  │  • Embeddings   │  │  • File upload          │
+│                 │  │  • Similarity   │  │  • S3-compatible API    │
+└─────────────────┘  └─────────────────┘  └─────────────────────────┘
+```
+
+---
+
+## VI. AI ENGINE
+
+```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    NEXT.JS 16 FRONTEND (Port 3003)                   │
-│  apps/web/  — App Router, Tailwind CSS, TypeScript                  │
+│                    Ollama  (Port 11434)                              │
+│                    Model: qwen2.5:7b                                 │
+│                    Volume: ollama_data                               │
 │                                                                      │
-│  Pages:  /login  /  /products  /orders  /customers  /leads          │
-│          /categories  /brands  /inventory  /payments  /campaigns     │
-│          /agents  /analytics  /users                                 │
-│                                                                      │
-│  Rewrite Proxy: /api/* → http://localhost:3002/api/*                │
-│  (Tránh CORS — browser gọi cùng origin)                             │
-└────────────────────────────┬────────────────────────────────────────┘
-                             │ HTTP (localhost)
-                             ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                    NESTJS API (Port 3002)                            │
-│  apps/api/  — TypeORM, Swagger /api/docs, JWT, WebSocket            │
-│                                                                      │
-│  ┌─────────── AUTH ────────────┐  ┌─────────── RBAC ─────────────┐  │
-│  │ POST /api/auth/login        │  │ @Roles(ADMIN|MANAGER|STAFF)  │  │
-│  │ POST /api/auth/register     │  │ Global AuthGuard (JWT HMAC)  │  │
-│  │ GET  /api/auth/me           │  │ Hierarchy:                   │  │
-│  │ POST /api/auth/refresh      │  │   VIEWER < STAFF             │  │
-│  └─────────────────────────────┘  │   < MANAGER < ADMIN          │  │
-│                                   └──────────────────────────────┘  │
-│                                                                      │
-│  ┌─────────── CORE CRUD ───────────────────────────────────────────┐ │
-│  │ /users        /products    /orders      /customers              │ │
-│  │ /leads        /payments    /categories  /brands                 │ │
-│  │ /inventory    /suppliers   /campaigns   /workflows              │ │
-│  │ /analytics    /marketplace                                      │ │
-│  └─────────────────────────────────────────────────────────────────┘ │
-│                                                                      │
-│  ┌─────────── 16 AI AGENTS (Cron + Manual) ───────────────────────┐ │
-│  │ /agents/trend           /agents/affiliate   /agents/content    │ │
-│  │ /agents/publisher       /agents/lead-hunter /agents/sales      │ │
-│  │ /agents/crm             /agents/video       /agents/seo        │ │
-│  │ /agents/trend-predictor /agents/price       /agents/segmentat. │ │
-│  │ /agents/email           /agents/telegram    /agents/knowledge  │ │
-│  │ /agents/master                                                  │ │
-│  └─────────────────────────────────────────────────────────────────┘ │
-│                                                                      │
-│  ┌─────────── V2/V3 CORE ─────────────────────────────────────────┐ │
-│  │ RagModule (Vector Search)    AiMemoryModule                    │ │
-│  │ ContentFactoryModule         AffiliateIntelligenceModule       │ │
-│  │ GatewayModule (WebSocket)    AiModule (Groq/OpenAI/Claude)     │ │
-│  └─────────────────────────────────────────────────────────────────┘ │
-└──────────────┬──────────────┬───────────┬──────────┬────────────────┘
-               │              │           │          │
-               ▼              ▼           ▼          ▼
-┌──────────────────┐ ┌──────────┐ ┌────────┐ ┌──────────────────┐
-│  PostgreSQL 16   │ │  Redis   │ │ Qdrant │ │     MinIO        │
-│  Port: 5432      │ │ Port:6379│ │  6333  │ │   Port: 9000     │
-│  (commerce_db)   │ │ Bull MQ  │ │ Vector │ │  File Storage    │
-│  TypeORM entities│ │ Job Queue│ │  RAG   │ │  (media/assets)  │
-└──────────────────┘ └──────────┘ └────────┘ └──────────────────┘
-      Docker Compose: commerce_postgres | commerce_redis
-                      commerce_qdrant   | commerce_minio
+│  Được gọi bởi:                                                       │
+│  ├── AI Module        → /api/ai/chat  (chat trực tiếp)              │
+│  ├── Content Agent    → Sinh mô tả sản phẩm                         │
+│  ├── SEO Agent        → Sinh bài viết SEO                           │
+│  ├── CRM Agent        → Sinh tin nhắn chăm sóc KH                  │
+│  ├── Lead Hunter      → Phân tích và phân loại leads                │
+│  └── RAG Module       → Trả lời dựa trên knowledge base            │
+└─────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    PROCESS MANAGER — PM2                             │
-│  commerce-api  (cluster, port 3002, max 512MB, autorestart)         │
-│  commerce-web  (cluster, port 3003, max 512MB, autorestart)         │
-│  Systemd: pm2-hqdu.service → tự động khởi động khi reboot           │
+│                 Open WebUI  (Port 3000 → Nginx /chat/)              │
+│                 Chat UI cho Ollama models                            │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## II. SƠ ĐỒ CHỨC NĂNG ĐẦY ĐỦ
-
-### 1. QUẢN TRỊ HỆ THỐNG
+## VII. WORKFLOW AUTOMATION — N8N
 
 ```
-1. QUẢN TRỊ HỆ THỐNG
-├── 1.1 Xác thực & Bảo mật
-│   ├── Đăng nhập bằng email + mật khẩu
-│   ├── JWT access token (HMAC-SHA256, 7 ngày)
-│   ├── Refresh token (30 ngày)
-│   ├── Mã hóa mật khẩu PBKDF2 (10.000 vòng, salt 16 bytes)
-│   └── Bảo vệ tất cả routes (Global AuthGuard)
-│
-└── 1.2 Quản lý người dùng & Phân quyền (RBAC)
-    ├── Xem danh sách tài khoản (Manager+)
-    ├── Tìm kiếm theo tên / email
-    ├── Lọc theo role / trạng thái
-    ├── Thống kê số lượng theo role & trạng thái
-    ├── Tạo tài khoản mới (Admin only)
-    │   ├── Nhập: tên, email, mật khẩu, role
-    │   └── Role: Admin | Manager | Staff | Viewer
-    ├── Thay đổi role inline (Admin only, không tự đổi mình)
-    ├── Kích hoạt / Khóa / Tạm ngừng tài khoản (Admin only)
-    ├── Reset mật khẩu (Admin only, tối thiểu 6 ký tự)
-    └── Xóa tài khoản (Admin only, không tự xóa mình)
-
-PHÂN QUYỀN CHI TIẾT:
-    ADMIN   — Toàn quyền: quản lý users, cấu hình, xóa dữ liệu
-    MANAGER — Xem báo cáo, CRUD sản phẩm/đơn/khách, xem users
-    STAFF   — Xử lý đơn hàng, quản lý leads, chạy agents
-    VIEWER  — Chỉ đọc, không thể thay đổi bất kỳ dữ liệu nào
+┌─────────────────────────────────────────────────────────────────────┐
+│                    N8N  (Port 5678 → Nginx /n8n/)                   │
+│                    DB: PostgreSQL (n8n schema)                       │
+│                    Volume: n8n_data                                  │
+│                                                                      │
+│  Triggers nhận từ NestJS API:                                        │
+│  POST /api/workflows/trigger/:workflowId                             │
+│                                                                      │
+│  Use cases:                                                          │
+│  ├── Đơn hàng mới → Gửi email xác nhận → Cập nhật tồn kho          │
+│  ├── Lead mới → Gửi tin nhắn chào hàng → Tạo task follow-up        │
+│  ├── Tồn kho thấp → Thông báo Telegram → Tạo PO tự động            │
+│  ├── Agent hoàn thành → Trigger agent tiếp theo                     │
+│  └── Shopee/Lazada webhook → Sync đơn hàng về hệ thống             │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### 2. QUẢN LÝ DANH MỤC SẢN PHẨM
+## VIII. MONITORING STACK
 
 ```
-2. QUẢN LÝ DANH MỤC SẢN PHẨM
-├── 2.1 Sản phẩm (Products)
-│   ├── Tạo sản phẩm mới
-│   │   ├── Tên, mô tả, SKU
-│   │   ├── Giá gốc, giá bán, % hoa hồng affiliate
-│   │   ├── Danh mục, thương hiệu
-│   │   ├── Ảnh sản phẩm (lưu MinIO)
-│   │   └── Slug tự động (hỗ trợ tiếng Việt có dấu → không dấu)
-│   ├── Sửa thông tin sản phẩm
-│   ├── Xóa sản phẩm
-│   ├── Tìm kiếm theo tên / SKU
-│   ├── Lọc theo danh mục / thương hiệu / trạng thái
-│   └── Phân trang (20 sp/trang)
-│
-├── 2.2 Danh mục (Categories)
-│   ├── Thêm danh mục (tên → slug tự động)
-│   ├── Sửa tên danh mục
-│   ├── Xóa danh mục
-│   └── Hỗ trợ danh mục cha / con
-│
-├── 2.3 Thương hiệu (Brands)
-│   ├── Thêm thương hiệu (tên, logo, website)
-│   ├── Xóa thương hiệu
-│   └── Liên kết với sản phẩm
-│
-├── 2.4 Tồn kho (Inventory)
-│   ├── Xem tồn kho theo sản phẩm / kho
-│   ├── Cảnh báo hàng sắp hết (low stock threshold)
-│   ├── Điều chỉnh số lượng
-│   │   ├── Nhập kho (in)
-│   │   ├── Xuất kho (out)
-│   │   └── Điều chỉnh thủ công (adjustment)
-│   ├── Xem tổng giá trị kho hàng
-│   └── Lịch sử giao dịch kho (ai làm, lúc nào, lý do)
-│
-└── 2.5 Nhà cung cấp (Suppliers)
-    ├── Thông tin liên hệ nhà cung cấp
-    └── Liên kết sản phẩm với nhà cung cấp
+┌─────────────────────────────────────────────────────────────────────┐
+│                        MONITORING                                    │
+│                                                                      │
+│  ┌──────────────────┐    ┌─────────────────┐    ┌───────────────┐  │
+│  │   Prometheus     │    │    Grafana       │    │     Loki      │  │
+│  │   Port 9090      │───►│    Port 3003     │◄───│   Port 3100   │  │
+│  │                  │    │                  │    │               │  │
+│  │  Scrape metrics: │    │  Dashboards:     │    │  Log aggre-   │  │
+│  │  • NestJS API    │    │  • API metrics   │    │  gation từ    │  │
+│  │  • Node exporter │    │  • System health │    │  tất cả       │  │
+│  │  • Postgres      │    │  • Agent KPI     │    │  services     │  │
+│  │  • Redis         │    │  • Business KPI  │    │               │  │
+│  └──────────────────┘    └─────────────────┘    └───────────────┘  │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │              Uptime Kuma  (Port 3002)                         │   │
+│  │  Monitor: API · Web · PostgreSQL · Redis · MinIO · Ollama    │   │
+│  │  Alert: Telegram / Email khi service down                    │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### 3. QUẢN LÝ BÁN HÀNG
+## IX. CI/CD PIPELINE
 
 ```
-3. QUẢN LÝ BÁN HÀNG
-├── 3.1 Đơn hàng (Orders)
-│   ├── Xem danh sách đơn hàng
-│   │   ├── Lọc theo trạng thái, kênh, ngày
-│   │   └── Phân trang
-│   ├── Tạo đơn hàng thủ công
-│   │   ├── Chọn khách hàng
-│   │   ├── Thêm sản phẩm + số lượng
-│   │   ├── Mã đơn tự sinh: ORD-YYYYMMDD-XXXXXX
-│   │   └── Tên sản phẩm tự điền từ DB
-│   ├── Cập nhật trạng thái đơn
-│   │   pending → confirmed → processing → shipped → delivered → completed
-│   │   (hoặc: cancelled / refunded)
-│   ├── Xem chi tiết đơn + các mặt hàng
-│   ├── Tổng doanh thu hôm nay / tháng
-│   └── Số đơn theo trạng thái
-│
-└── 3.2 Thanh toán (Payments)
-    ├── Danh sách giao dịch thanh toán
-    ├── Lọc theo phương thức, trạng thái
-    ├── Thống kê: tổng thu / theo phương thức / thành công / thất bại
-    └── Liên kết với đơn hàng tương ứng
-```
-
----
-
-### 4. QUẢN LÝ KHÁCH HÀNG & LEADS
-
-```
-4. QUẢN LÝ KHÁCH HÀNG & LEADS
-├── 4.1 Khách hàng (Customers)
-│   ├── Danh sách khách hàng
-│   ├── Tìm kiếm theo tên / SĐT / email
-│   ├── Lọc theo tier
-│   ├── Hệ thống phân tier tự động
-│   │   Bronze → Silver → Gold → VIP → Diamond
-│   │   (dựa trên tổng chi tiêu & số lần mua)
-│   ├── Thông tin: tên, SĐT, email, địa chỉ, ngày sinh
-│   ├── Lịch sử đơn hàng, tổng chi tiêu
-│   ├── Điểm loyalty
-│   └── Tạo khách hàng thủ công
-│
-└── 4.2 Leads (Khách hàng tiềm năng)
-    ├── Thu thập tự động từ đa kênh
-    │   Facebook | TikTok | Zalo | Web | Telegram | Shopee
-    ├── Xem danh sách leads
-    ├── AI Score (0–100): mức độ sẵn sàng mua
-    │   ├── > 80: Hot lead — ưu tiên liên hệ ngay
-    │   ├── 50–80: Warm lead — nurturing
-    │   └── < 50: Cold lead — chờ
-    ├── Trạng thái pipeline
-    │   new → contacted → qualified → converted → lost
-    ├── Lọc theo kênh, điểm AI, trạng thái
-    └── Chuyển lead thành khách hàng
-```
-
----
-
-### 5. MARKETING & CHIẾN DỊCH
-
-```
-5. MARKETING & CHIẾN DỊCH
-├── 5.1 Chiến dịch (Campaigns)
-│   ├── Tạo chiến dịch marketing
-│   │   ├── Tên chiến dịch, mục tiêu
-│   │   ├── Nền tảng: Facebook | TikTok | Zalo | Telegram | Email | Google
-│   │   ├── Ngân sách, thời gian bắt đầu / kết thúc
-│   │   └── Trạng thái: draft → active → paused → completed
-│   ├── Theo dõi hiệu quả chiến dịch
-│   │   ├── Lượt tiếp cận, click, chuyển đổi
-│   │   └── Chi phí / đơn hàng
-│   └── Xem danh sách chiến dịch đang chạy
-│
-└── 5.2 Affiliate Marketing (tự động qua Agent)
-    ├── Quét sản phẩm affiliate Shopee / Lazada / TikTok Shop
-    ├── Tự động lấy link affiliate
-    ├── Tính hoa hồng ước tính
-    └── Đăng link vào nội dung tự động
-```
-
----
-
-### 6. PHÂN TÍCH & BÁO CÁO
-
-```
-6. PHÂN TÍCH & BÁO CÁO (Analytics)
-├── 6.1 Doanh thu
-│   ├── Doanh thu hôm nay
-│   ├── Doanh thu tháng này
-│   ├── Doanh thu 30 ngày qua
-│   ├── Số đơn hàng theo kỳ
-│   └── So sánh với kỳ trước (% tăng/giảm)
-│
-├── 6.2 Khách hàng
-│   ├── Tổng số khách hàng
-│   ├── Khách hàng mới (hôm nay / tháng)
-│   ├── Khách VIP / Diamond
-│   ├── Tỷ lệ giữ chân (retention rate)
-│   └── Phân bổ theo tier
-│
-├── 6.3 Leads
-│   ├── Tổng leads / leads mới hôm nay
-│   ├── Tỷ lệ chuyển đổi (conversion rate)
-│   ├── Leads theo kênh (FB / TikTok / Zalo / Web)
-│   └── Funnel: new → converted
-│
-└── 6.4 AI Performance
-    ├── Tổng số lần agent chạy (24h / 30 ngày)
-    ├── Tỷ lệ thành công
-    ├── Thời gian chạy trung bình
-    ├── Token AI đã sử dụng
-    ├── Chi phí AI ước tính
-    └── Thống kê chi tiết từng agent
-        (runs / success / failed / tokens / avg duration)
-```
-
----
-
-### 7. 16 AI AGENTS TỰ ĐỘNG
-
-```
-7. 16 AI AGENTS TỰ ĐỘNG
-│
-├── NHÓM 1: THU THẬP DỮ LIỆU THỊ TRƯỜNG
-│   │
-│   ├── 🔥 Trend Hunter Agent                    [Cron: mỗi 4 giờ]
-│   │   ├── Quét TikTok trending hashtags
-│   │   ├── Quét Facebook trending topics
-│   │   ├── Quét Google Trends
-│   │   ├── AI scoring từng xu hướng (0-100)
-│   │   └── Lưu top products theo xu hướng
-│   │
-│   ├── 🔗 Affiliate Hunter Agent                [Cron: mỗi 6 giờ]
-│   │   ├── Quét Shopee bestsellers
-│   │   ├── Quét Lazada hot deals
-│   │   ├── Quét TikTok Shop trending
-│   │   ├── Lấy link affiliate tự động
-│   │   └── Tính hoa hồng ước tính
-│   │
-│   └── 📈 Trend Predictor Agent                 [Cron: mỗi 6 giờ]
-│       ├── Phân tích đa nguồn dữ liệu
-│       ├── AI dự báo xu hướng 7–30 ngày tới
-│       ├── Confidence score cho từng dự báo
-│       └── Đề xuất sản phẩm nên nhập / đẩy
-│
-├── NHÓM 2: TẠO NỘI DUNG
-│   │
-│   ├── ✍️  Content Creator Agent                 [Cron: mỗi 1 giờ]
-│   │   ├── Nhận trend từ Trend Hunter
-│   │   ├── AI viết caption Facebook (hooks + CTA)
-│   │   ├── AI viết script TikTok (15s / 30s / 60s)
-│   │   ├── AI viết nội dung Telegram
-│   │   └── Đa dạng format: review, FOMO, educational
-│   │
-│   ├── 🎬 Video Creator Agent                   [Cron: mỗi 10 giờ]
-│   │   ├── AI tạo script video sản phẩm
-│   │   ├── Text-to-Speech (TTS) giọng Việt
-│   │   ├── Tạo thumbnail ảnh
-│   │   ├── Ghép video + audio
-│   │   └── Chuẩn bị upload TikTok
-│   │
-│   └── 🔍 SEO Agent                             [Cron: mỗi 7 giờ]
-│       ├── AI viết bài blog chuẩn SEO
-│       ├── Tạo meta title + description
-│       ├── Nghiên cứu keyword cluster
-│       ├── Internal linking suggestions
-│       └── Schema markup tự động
-│
-├── NHÓM 3: ĐĂNG & PHÂN PHỐI NỘI DUNG
-│   │
-│   ├── 📣 Social Publisher Agent          [Cron: 8h, 12h, 18h hàng ngày]
-│   │   ├── Lấy nội dung từ Content Creator
-│   │   ├── Đăng Facebook Page / Group
-│   │   ├── Đăng TikTok (video + caption)
-│   │   ├── Đăng Telegram channel
-│   │   ├── Queue bài theo lịch
-│   │   └── Báo cáo: đã đăng / thất bại
-│   │
-│   └── ✈️  Telegram Bot Agent             [Cron: 9h, 15h, 21h hàng ngày]
-│       ├── Gửi flash sale / deal hôm nay
-│       ├── Gửi sản phẩm trending
-│       ├── Phản hồi câu hỏi khách hàng
-│       └── Quản lý nhóm KH VIP
-│
-├── NHÓM 4: BÁN HÀNG & CHĂM SÓC KHÁCH HÀNG
-│   │
-│   ├── 🎯 Lead Hunter Agent                     [Cron: mỗi 30 phút]
-│   │   ├── Quét comment Facebook (từ khóa mua hàng)
-│   │   ├── Thu thập form đăng ký web
-│   │   ├── Nhận leads từ Zalo / Telegram
-│   │   ├── AI phân loại & chấm điểm lead (0-100)
-│   │   └── Phân công lead cho staff
-│   │
-│   ├── 💬 Sales Agent                           [Real-time]
-│   │   ├── AI tư vấn sản phẩm (RAG từ knowledge base)
-│   │   ├── Trả lời câu hỏi khách hàng 24/7
-│   │   ├── Gợi ý sản phẩm phù hợp
-│   │   ├── Xử lý phản đối (objection handling)
-│   │   └── Chốt đơn tự động
-│   │
-│   └── 👥 CRM Agent                             [Cron: mỗi 2 giờ]
-│       ├── Tự động nâng tier KH (dựa trên chi tiêu)
-│       ├── Phát hiện KH có nguy cơ rời bỏ (churn)
-│       ├── Gửi ưu đãi chống churn
-│       ├── Nurturing sequence (chuỗi chăm sóc)
-│       └── Nhắc nhở: sinh nhật, kỷ niệm mua hàng
-│
-├── NHÓM 5: PHÂN TÍCH & TỐI ƯU
-│   │
-│   ├── 💰 Price Intelligence Agent              [Cron: mỗi 1 giờ]
-│   │   ├── Theo dõi giá đối thủ Shopee / Lazada / Tiki
-│   │   ├── So sánh giá của mình vs đối thủ
-│   │   ├── Cảnh báo khi giá đối thủ thấp hơn
-│   │   └── Đề xuất điều chỉnh giá / khuyến mãi
-│   │
-│   ├── 🗂 Segmentation Agent                   [Cron: mỗi 2 giờ]
-│   │   ├── Phân khúc KH theo hành vi mua
-│   │   ├── RFM Analysis (Recency/Frequency/Monetary)
-│   │   ├── Cluster KH bằng AI
-│   │   └── Đề xuất chiến lược cho từng phân khúc
-│   │
-│   └── 📧 Email Marketing Agent                 [Cron: mỗi 8 giờ]
-│       ├── Email chào mừng KH mới
-│       ├── Email upsell / cross-sell
-│       ├── Email remarketing giỏ hàng bỏ dở
-│       ├── Email flash sale / deal đặc biệt
-│       └── Cá nhân hóa nội dung theo segment
-│
-└── NHÓM 6: HẠ TẦNG AI
+Developer
     │
-    ├── 🧠 Knowledge Agent                       [Cron: mỗi 3 giờ]
-    │   ├── Sync dữ liệu sản phẩm → Qdrant (vector)
-    │   ├── Đồng bộ knowledge base nội bộ
-    │   ├── AI Q&A từ knowledge base (RAG)
-    │   ├── Index tài liệu, chính sách, FAQ
-    │   └── Thống kê: số documents, queries
-    │
-    └── 👑 Executive AI (Master Agent)           [Cron: mỗi 1 giờ]
-        ├── Theo dõi trạng thái 15 agents còn lại
-        ├── Điều phối thứ tự chạy các agents
-        ├── Phát hiện agent lỗi → tự restart
-        ├── Tổng hợp KPI toàn hệ thống
-        └── Báo cáo định kỳ: doanh thu, leads, hiệu quả AI
+    │  git push origin main
+    ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                   GitHub Repository                                  │
+│           https://github.com/hqdubmt/WEBBANHANG                     │
+│                                                                      │
+│  .github/workflows/deploy.yml                                        │
+│  Trigger: push to main / workflow_dispatch                           │
+└──────────────────────┬──────────────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│              GitHub Actions — Self-hosted Runner (VPS)               │
+│                                                                      │
+│  JOB 1: 🐳 Build & Push Docker Hub (~5 phút)                        │
+│  ├── git pull origin main                                            │
+│  ├── docker build → hqdu/webbanhang-api:<sha> + :latest             │
+│  ├── docker push → Docker Hub                                        │
+│  ├── docker build → hqdu/webbanhang-web:<sha> + :latest             │
+│  └── docker push → Docker Hub                                        │
+│                                                                      │
+│  JOB 2: 🚀 Deploy VPS (~44 giây)  [needs: docker]                  │
+│  ├── tạo .env từ GitHub Secret PROD_ENV                             │
+│  ├── npm ci + npm run build (NestJS → dist/)                        │
+│  ├── npm ci + npm run build (Next.js → .next/)                      │
+│  ├── pm2 restart commerce-api --update-env                           │
+│  ├── pm2 restart commerce-web --update-env                           │
+│  └── curl health check :3002/health                                  │
+│                                                                      │
+│  JOB 3: 📣 Telegram Notify  [needs: docker + deploy, if: always]   │
+│  └── gửi kết quả + image tag + commit info qua Telegram Bot         │
+└──────────────────────┬──────────────────────────────────────────────┘
+                       │
+          ┌────────────┴────────────┐
+          ▼                         ▼
+┌──────────────────┐      ┌──────────────────────┐
+│   Docker Hub     │      │   VPS Ubuntu         │
+│  hqdu/webbanhang │      │  PM2 commerce-api    │
+│  -api:latest     │      │  PM2 commerce-web    │
+│  -web:latest     │      │  (cập nhật live)     │
+└──────────────────┘      └──────────────────────┘
+```
+
+**GitHub Secrets cần thiết:**
+
+| Secret | Dùng cho |
+|--------|----------|
+| `PROD_ENV` | Toàn bộ nội dung file `.env` |
+| `DOCKERHUB_USERNAME` | `hqdu` |
+| `DOCKERHUB_TOKEN` | Docker Hub access token |
+| `TELEGRAM_BOT_TOKEN` | Bot Telegram thông báo |
+| `TELEGRAM_CHAT_ID` | Chat ID nhận thông báo |
+
+---
+
+## X. PROCESS MANAGEMENT — PM2
+
+```
+VPS Ubuntu  (/home/hqdu/quangdu/webbanhang/)
+│
+├── PM2 Processes:
+│   ├── commerce-api  (ID: 2)
+│   │   ├── cwd:    apps/api/
+│   │   ├── script: dist/main.js
+│   │   ├── port:   3002
+│   │   ├── memory: max 512MB
+│   │   └── logs:   logs/api-out.log · logs/api-error.log
+│   │
+│   └── commerce-web  (ID: 3)
+│       ├── cwd:    apps/web/
+│       ├── script: node_modules/.bin/next start -p 3003
+│       ├── port:   3003
+│       ├── memory: max 512MB
+│       └── logs:   logs/web-out.log · logs/web-error.log
+│
+└── Docker Containers (services):
+    ├── commerce_postgres    :5432
+    ├── commerce_redis       :6379
+    ├── commerce_minio       :9000/:9001
+    ├── commerce_qdrant      :6333/:6334
+    ├── commerce_n8n         :5678
+    ├── commerce_ollama      :11434
+    ├── commerce_open_webui  :3000
+    ├── commerce_nginx       :80/:443
+    ├── commerce_prometheus  :9090
+    ├── commerce_grafana     :3003
+    ├── commerce_loki        :3100
+    └── commerce_uptime_kuma :3002
 ```
 
 ---
 
-### 8. HẠ TẦNG AI & TRI THỨC
+## XI. API ENDPOINTS ĐẦY ĐỦ
 
+### Auth
 ```
-8. HẠ TẦNG AI & TRI THỨC
-│
-├── 8.1 AI Engine (AiModule)
-│   ├── Groq — LLaMA 3.1 70B          (mặc định, nhanh, rẻ)
-│   ├── OpenAI GPT-4o                  (chất lượng cao)
-│   └── Anthropic Claude               (backup / phân tích phức tạp)
-│
-├── 8.2 RAG — Retrieval-Augmented Generation (RagModule)
-│   ├── Lưu embeddings vào Qdrant
-│   ├── Tìm kiếm ngữ nghĩa (semantic search)
-│   ├── AI trả lời dựa trên knowledge base nội bộ
-│   └── Độ chính xác cao hơn AI thuần túy
-│
-├── 8.3 AI Memory (AiMemoryModule)
-│   ├── Ghi nhớ context hội thoại Sales AI
-│   ├── Học từ lịch sử tương tác KH
-│   └── Cá nhân hóa trải nghiệm từng KH
-│
-├── 8.4 Content Factory (ContentFactoryModule)
-│   ├── Pipeline tạo nội dung hàng loạt
-│   ├── Template + AI fill nội dung
-│   └── Multi-platform output (FB / TikTok / Telegram / Email)
-│
-└── 8.5 Affiliate Intelligence (AffiliateIntelligenceModule)
-    ├── Phân tích hiệu quả link affiliate
-    ├── Tự động chọn sản phẩm tốt nhất để promote
-    └── Tối ưu hoa hồng theo từng kênh
+POST   /api/auth/login
+POST   /api/auth/register
 ```
 
----
-
-### 9. TÍCH HỢP ĐA KÊNH
-
+### Core Commerce
 ```
-9. TÍCH HỢP ĐA KÊNH (Marketplace & Social)
-│
-├── 9.1 Sàn thương mại điện tử
-│   ├── Shopee       — Sync SP, đơn hàng, giá, affiliate
-│   ├── Lazada       — Sync SP, theo dõi giá đối thủ
-│   └── TikTok Shop  — Đăng video, affiliate, đơn hàng
-│
-├── 9.2 Mạng xã hội
-│   ├── Facebook     — Đăng bài, chạy ads, nhận leads comment
-│   ├── TikTok       — Đăng video tự động, viral content
-│   └── Zalo         — Gửi tin nhắn, chăm sóc KH, nhận leads
-│
-└── 9.3 Messaging
-    ├── Telegram     — Bot tự động, kênh thông báo, nhóm KH VIP
-    └── Email        — Transactional + Marketing emails
-```
+GET|POST          /api/products
+GET|PATCH|DELETE  /api/products/:id
 
----
+GET|POST          /api/categories
+GET|PATCH|DELETE  /api/categories/:id
 
-### 10. GIAO TIẾP REAL-TIME & JOB QUEUE
+GET|POST          /api/brands
+GET|PATCH|DELETE  /api/brands/:id
 
-```
-10. GIAO TIẾP REAL-TIME & XỬ LÝ BẤT ĐỒNG BỘ
-│
-├── 10.1 WebSocket (GatewayModule)
-│   ├── ws://server:3002/ws
-│   ├── Thông báo đơn hàng mới real-time
-│   ├── Cập nhật trạng thái agent live
-│   ├── Dashboard metrics live
-│   └── AI Sales chat với khách hàng
-│
-└── 10.2 Bull Job Queue (Redis-backed)
-    ├── Gửi email hàng loạt
-    ├── Tạo video (tác vụ nặng)
-    ├── Sync marketplace (Shopee / Lazada)
-    ├── Xuất báo cáo PDF
-    └── Retry tự động khi job thất bại
+GET|POST          /api/orders
+GET|PATCH|DELETE  /api/orders/:id
+
+GET|POST          /api/customers
+GET|PATCH|DELETE  /api/customers/:id
+
+GET|POST          /api/leads
+GET|PATCH|DELETE  /api/leads/:id
+
+GET|POST          /api/inventory
+GET|PATCH         /api/inventory/:id
+
+GET|POST          /api/payments
+GET               /api/payments/:id
+
+GET|POST          /api/campaigns
+GET|PATCH|DELETE  /api/campaigns/:id
 ```
 
----
-
-### 11. DATABASE SCHEMA CHÍNH
-
+### Portals
 ```
-11. DATABASE SCHEMA CHÍNH (PostgreSQL)
-│
-├── users            — Tài khoản hệ thống (id, email, passwordHash, role, status)
-├── products         — Sản phẩm (id, name, slug, sku, price, salePrice, categoryId)
-├── categories       — Danh mục (id, name, slug, parentId)
-├── brands           — Thương hiệu (id, name, logo, website)
-├── customers        — Khách hàng (id, name, phone, email, tier, totalSpent)
-├── orders           — Đơn hàng (id, code, customerId, status, channel, total)
-├── order_items      — Chi tiết đơn (id, orderId, productId, productName, qty, price)
-├── leads            — Leads (id, name, phone, platform, score, status, source)
-├── payments         — Thanh toán (id, orderId, amount, method, status)
-├── inventory        — Tồn kho (id, productId, warehouseId, qty, minQty)
-├── inventory_txns   — Giao dịch kho (id, inventoryId, type, qty, reason, userId)
-├── suppliers        — Nhà cung cấp (id, name, contact, products)
-├── campaigns        — Chiến dịch (id, name, platform, budget, startAt, endAt)
-├── agent_logs       — Log agents (id, agent, status, input, output, tokens, durationMs)
-├── ai_memories      — Bộ nhớ AI (id, sessionId, role, content, embedding)
-├── knowledge_docs   — Tài liệu knowledge base (id, title, content, vector)
-├── workflows        — Quy trình tự động (id, name, trigger, steps, active)
-└── marketplace_sync — Lịch sử đồng bộ sàn TMĐT
+GET|POST          /api/suppliers
+GET|PATCH|DELETE  /api/suppliers/:id
+GET|POST          /api/suppliers/:id/products
+
+GET|POST          /api/dropship
+GET|PATCH         /api/dropship/:id
+
+GET|POST          /api/affiliates
+GET|PATCH|DELETE  /api/affiliates/:id
+
+GET               /api/marketplace/sync-all
+POST              /api/marketplace/shopee/sync
+POST              /api/marketplace/lazada/sync
+POST              /api/marketplace/tiktok/sync
 ```
 
----
-
-## III. LUỒNG DỮ LIỆU CHÍNH
-
+### AI & Analytics
 ```
-LUỒNG 1: LEAD → KHÁCH HÀNG → ĐƠN HÀNG
-─────────────────────────────────────────
-Mạng xã hội (FB/TikTok/Zalo)
-    │
-    ▼ Lead Hunter Agent (30min)
-Leads DB ──→ AI Score ──→ [Hot > 80] ──→ Sales Agent (real-time)
-                                              │
-                                              ▼
-                                         Tư vấn + Chốt đơn
-                                              │
-                                              ▼
-                                         Orders + Order Items
-                                              │
-                                              ▼
-                                    Payments ──→ Analytics
-                                              │
-                                              ▼
-                                    Inventory giảm tồn kho
-                                              │
-                                              ▼
-                                    CRM Agent: nâng tier KH
+POST   /api/ai/chat
+POST   /api/ai/embed
+GET    /api/analytics/kpi
+GET    /api/analytics/revenue
+GET    /api/analytics/products/top
+GET    /api/analytics/customers/top
+POST   /api/workflows/trigger/:workflowId
+```
 
+### AI Agents (20 agents)
+```
+POST   /api/agents/master/run
+GET    /api/agents/master/kpi
 
-LUỒNG 2: XU HƯỚNG → NỘI DUNG → ĐĂNG BÀI
-──────────────────────────────────────────
-Google/TikTok/FB Trends
-    │
-    ▼ Trend Hunter (4h)
-Trend Score ──→ Content Creator (1h)
-                    │
-                    ├──→ Bài Facebook
-                    ├──→ Script TikTok ──→ Video Creator (10h) ──→ Video file
-                    └──→ Nội dung Telegram
-                              │
-                              ▼ Social Publisher (8h/12h/18h)
-                         Đăng lên FB / TikTok / Telegram
-                              │
-                              ▼
-                    Leads mới từ comment / click
+POST   /api/agents/trend/run
+POST   /api/agents/trend-predictor/run
 
+POST   /api/agents/content/run
+POST   /api/agents/publisher/run
+POST   /api/agents/seo/run
 
-LUỒNG 3: AGENT ĐIỀU PHỐI (MASTER AI)
-──────────────────────────────────────
-Executive AI (mỗi 1h)
-    │
-    ├── Kiểm tra sức khỏe 15 agents
-    ├── Tổng hợp KPI: doanh thu, leads, content
-    ├── Phát hiện bất thường → cảnh báo
-    └── Báo cáo dashboard
+POST   /api/agents/video/run
+POST   /api/agents/video-optimizer/run
 
+POST   /api/agents/price/run
+POST   /api/agents/repricing/run
+POST   /api/agents/competitor-monitor/run
 
-LUỒNG 4: KIẾN THỨC → AI PHẢN HỒI
-───────────────────────────────────
-Dữ liệu SP + FAQ + Chính sách
-    │
-    ▼ Knowledge Agent (3h)
-Qdrant Vector DB
-    │
-    ▼ RAG Search (real-time)
-Sales Agent ──→ Câu trả lời chính xác cho khách
+POST   /api/agents/crm/run
+POST   /api/agents/lead-hunter/run
+POST   /api/agents/sales/run
+POST   /api/agents/affiliate/run
+
+POST   /api/agents/demand-forecaster/run
+POST   /api/agents/knowledge/sync
+
+GET    /api/agents/logs
+GET    /api/agents/logs/:agent
+```
+
+### Users & Settings
+```
+GET|POST          /api/users
+GET|PATCH|DELETE  /api/users/:id
+
+GET    /api/brand/upload
+POST   /api/brand/upload   (multipart/form-data)
+DELETE /api/brand/upload
 ```
 
 ---
 
-## IV. THỐNG KÊ HỆ THỐNG
+## XII. LUỒNG DỮ LIỆU CHÍNH
 
-| Thành phần | Chi tiết |
-|---|---|
-| **Frontend pages** | 14 trang (/login, dashboard, products, orders, customers, leads, categories, brands, inventory, payments, campaigns, agents, analytics, users) |
-| **API endpoints** | ~85 endpoints |
-| **AI Agents** | 16 agents |
-| **Cron jobs** | 14 lịch tự động khác nhau |
-| **Kênh tích hợp** | 6 (Shopee, Lazada, TikTok, Facebook, Zalo, Telegram) |
-| **AI Providers** | 3 (Groq, OpenAI, Anthropic) |
-| **Database tables** | ~18 bảng chính |
-| **Cấp phân quyền** | 4 (Admin, Manager, Staff, Viewer) |
-| **Dịch vụ hạ tầng** | 4 (PostgreSQL, Redis, Qdrant, MinIO) |
-| **Process manager** | PM2 + Systemd auto-start |
-| **Port API** | 3002 |
-| **Port Web** | 3003 |
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    LUỒNG ĐƠN HÀNG                                   │
+│                                                                      │
+│  Khách đặt hàng                                                      │
+│      │                                                               │
+│      ▼                                                               │
+│  POST /api/orders  →  PostgreSQL (orders + order_items)             │
+│      │                                                               │
+│      ├──► WebSocket → Thông báo realtime cho admin                  │
+│      ├──► Inventory Service → Trừ tồn kho tự động                  │
+│      ├──► N8N Workflow → Gửi email xác nhận                         │
+│      └──► Telegram Agent → Push thông báo Telegram                  │
+│                                                                      │
+│  Khi tồn kho < ngưỡng:                                              │
+│      └──► Demand Forecaster → Cảnh báo → Tạo PO                    │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                    LUỒNG AI AGENT (Cron hàng giờ)                   │
+│                                                                      │
+│  Master Agent (0 * * * *)                                            │
+│      │                                                               │
+│      ├── Đánh giá KPI từ PostgreSQL (agent_logs)                    │
+│      ├── Phân tích performance từng agent                            │
+│      └── Dispatch tasks:                                             │
+│              │                                                       │
+│              ├──► Trend Agent → Phân tích xu hướng                  │
+│              │        └──► Content Agent → Sinh content             │
+│              │                   └──► Publisher → Đăng bài          │
+│              │                                                       │
+│              ├──► Price Agent → Check giá đối thủ                   │
+│              │        └──► Repricing → Cập nhật giá bán             │
+│              │                                                       │
+│              ├──► Lead Hunter → Tìm leads mới                       │
+│              │        └──► CRM Agent → Chăm sóc leads               │
+│              │                                                       │
+│              └──► Knowledge Agent → Sync Qdrant vector DB           │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                    LUỒNG MARKETPLACE SYNC                           │
+│                                                                      │
+│  Shopee / Lazada / TikTok Shop                                       │
+│      │                                                               │
+│      ├── Webhook → N8N → POST /api/marketplace/sync                 │
+│      │                                                               │
+│      └── Cron Sync:                                                  │
+│              ├── Pull đơn hàng mới → tạo orders                     │
+│              ├── Sync tồn kho hai chiều                              │
+│              └── Push giá mới khi Repricing Agent thay đổi          │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## V. THÔNG TIN TRUY CẬP
+## XIII. CẤU TRÚC THƯ MỤC DỰ ÁN
 
-| Dịch vụ | URL |
-|---|---|
-| Web Admin | `http://server:3003` |
-| API | `http://server:3002/api` |
-| Swagger Docs | `http://server:3002/api/docs` |
-| WebSocket | `ws://server:3002/ws` |
-| MinIO Console | `http://server:9001` |
-| Qdrant Dashboard | `http://server:6333/dashboard` |
+```
+webbanhang/
+├── .github/
+│   └── workflows/
+│       └── deploy.yml          ← CI/CD GitHub Actions
+│
+├── apps/
+│   ├── api/                    ← NestJS API
+│   │   ├── src/
+│   │   ├── dist/               ← Build output (git ignore)
+│   │   ├── Dockerfile
+│   │   └── package.json
+│   │
+│   └── web/                    ← Next.js Web
+│       ├── src/
+│       ├── .next/              ← Build output (git ignore)
+│       ├── public/brand/       ← Logo upload directory
+│       ├── Dockerfile
+│       └── package.json
+│
+├── CI-CD/                      ← Tài liệu & script CI/CD
+│   ├── SETUP.md
+│   ├── setup-runner.sh
+│   └── actions/                ← Workflow examples
+│
+├── database/                   ← Docker compose từng DB riêng lẻ
+├── monitoring/                 ← Prometheus + Grafana config
+├── nginx/                      ← Nginx config + SSL
+├── logs/                       ← PM2 logs (git ignore)
+│
+├── docker-compose.yml          ← Toàn bộ services
+├── ecosystem.config.js         ← PM2 config
+├── Makefile                    ← Shortcut commands
+├── .env                        ← Secrets (git ignore)
+├── .env.example                ← Template .env
+└── so-do-full.md               ← File này
+```
 
 ---
 
-*Tài liệu này được tạo tự động từ hệ thống AI Social Commerce OS V3*  
-*Cập nhật: 2026-06-11*
+## XIV. PORTS & SERVICES TỔNG HỢP
+
+| Service | Port | Truy cập | Ghi chú |
+|---------|------|----------|---------|
+| Nginx | 80 / 443 | Public | Reverse proxy chính |
+| Next.js Web | 3003 | Qua Nginx `/` | PM2 |
+| NestJS API | 3002 | Qua Nginx `/api/` | PM2 |
+| PostgreSQL | 5432 | localhost only | Docker |
+| Redis | 6379 | localhost only | Docker |
+| MinIO API | 9000 | localhost only | Docker |
+| MinIO Console | 9001 | Qua Nginx `/minio/` | Docker |
+| Qdrant HTTP | 6333 | localhost only | Docker |
+| Qdrant gRPC | 6334 | localhost only | Docker |
+| N8N | 5678 | Qua Nginx `/n8n/` | Docker |
+| Ollama | 11434 | localhost only | Docker |
+| Open WebUI | 3000 | Qua Nginx `/chat/` | Docker |
+| Prometheus | 9090 | localhost only | Docker |
+| Grafana | 3003 | localhost only | Docker |
+| Loki | 3100 | localhost only | Docker |
+| Uptime Kuma | 3002 | localhost only | Docker |
+
+---
+
+*Cập nhật: 2026-06-11 · AI Commerce OS V3*
