@@ -3,97 +3,133 @@ name: 🚀 Deploy AI Commerce
 on:
   push:
     branches: [main]
-  workflow_dispatch:       # cho phép chạy thủ công trên GitHub
+  workflow_dispatch:
 
 env:
   DEPLOY_DIR: /home/hqdu/quangdu/webbanhang
+  IMAGE_API: hqdu/webbanhang-api
+  IMAGE_WEB: hqdu/webbanhang-web
 
 jobs:
   # ─────────────────────────────────────────
-  # JOB 1: Build & Deploy (self-hosted VPS)
+  # JOB 1: Build Docker images & push Docker Hub
   # ─────────────────────────────────────────
-  deploy:
-    name: Build & Deploy
+  docker:
+    name: 🐳 Build & Push Docker Hub
     runs-on: [self-hosted, Linux]
-    timeout-minutes: 20
+    timeout-minutes: 30
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
 
     steps:
-      # 1. Lấy code mới nhất về deploy directory
       - name: 📥 Pull latest code
         run: |
           git -C ${{ env.DEPLOY_DIR }} fetch --all
           git -C ${{ env.DEPLOY_DIR }} reset --hard origin/main
 
-      # 2. Tạo file .env từ GitHub Secret
-      - name: 🔐 Create .env
+      - name: 🏷️ Set image tag
+        id: tag
         run: |
-          echo "${{ secrets.PROD_ENV }}" > ${{ env.DEPLOY_DIR }}/.env
+          SHORT_SHA=$(git -C ${{ env.DEPLOY_DIR }} rev-parse --short HEAD)
+          echo "tag=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "Image tag: ${SHORT_SHA}"
 
-      # ── BUILD API (NestJS) ────────────────
-      - name: 📦 Install API dependencies
+      - name: 🔑 Login to Docker Hub
+        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      # ── API Image ────────────────────────
+      - name: 🔨 Build API image
         working-directory: ${{ env.DEPLOY_DIR }}/apps/api
-        run: npm ci --prefer-offline
+        run: |
+          docker build -t ${{ env.IMAGE_API }}:${{ steps.tag.outputs.tag }} \
+                       -t ${{ env.IMAGE_API }}:latest .
 
-      - name: 🔨 Build API
+      - name: 📤 Push API image
+        run: |
+          docker push ${{ env.IMAGE_API }}:${{ steps.tag.outputs.tag }}
+          docker push ${{ env.IMAGE_API }}:latest
+
+      # ── Web Image ────────────────────────
+      - name: 🔨 Build Web image
+        working-directory: ${{ env.DEPLOY_DIR }}/apps/web
+        run: |
+          docker build -t ${{ env.IMAGE_WEB }}:${{ steps.tag.outputs.tag }} \
+                       -t ${{ env.IMAGE_WEB }}:latest .
+
+      - name: 📤 Push Web image
+        run: |
+          docker push ${{ env.IMAGE_WEB }}:${{ steps.tag.outputs.tag }}
+          docker push ${{ env.IMAGE_WEB }}:latest
+
+  # ─────────────────────────────────────────
+  # JOB 2: Deploy lên VPS (PM2)
+  # ─────────────────────────────────────────
+  deploy:
+    name: 🚀 Deploy VPS
+    runs-on: [self-hosted, Linux]
+    needs: docker
+    timeout-minutes: 20
+
+    steps:
+      - name: 🔐 Create .env
+        run: echo "${{ secrets.PROD_ENV }}" > ${{ env.DEPLOY_DIR }}/.env
+
+      - name: 📦 Install & Build API
         working-directory: ${{ env.DEPLOY_DIR }}/apps/api
-        run: npm run build
+        run: |
+          npm ci --prefer-offline
+          npm run build
 
-      # ── BUILD WEB (Next.js) ───────────────
-      - name: 📦 Install Web dependencies
+      - name: 📦 Install & Build Web
         working-directory: ${{ env.DEPLOY_DIR }}/apps/web
-        run: npm ci --prefer-offline
+        run: |
+          npm ci --prefer-offline
+          npm run build
 
-      - name: 🔨 Build Web
-        working-directory: ${{ env.DEPLOY_DIR }}/apps/web
-        run: npm run build
+      - name: ♻️  Restart PM2
+        run: |
+          npx pm2 restart commerce-api --update-env
+          npx pm2 restart commerce-web --update-env
+          npx pm2 save
 
-      # 3. Restart PM2
-      - name: ♻️  Restart API via PM2
-        run: npx pm2 restart commerce-api --update-env
-
-      - name: ♻️  Restart Web via PM2
-        run: npx pm2 restart commerce-web --update-env
-
-      - name: 💾 Save PM2 state
-        run: npx pm2 save
-
-      # 4. Health check đơn giản
       - name: 🏥 Health check
         run: |
           sleep 5
-          curl -sf http://localhost:3002/health || echo "⚠️  API health check failed (non-blocking)"
+          curl -sf http://localhost:3002/health || echo "⚠️  API health check failed"
 
   # ─────────────────────────────────────────
-  # JOB 2: Thông báo Telegram
+  # JOB 3: Telegram Notification
   # ─────────────────────────────────────────
   notify:
-    name: Telegram Notify
+    name: 📣 Telegram Notify
     runs-on: [self-hosted, Linux]
-    needs: deploy
-    if: always()    # chạy dù deploy thành công hay thất bại
+    needs: [docker, deploy]
+    if: always()
 
     steps:
-      - name: 📣 Send Telegram notification
+      - name: Send notification
         run: |
-          STATUS="${{ needs.deploy.result }}"
-          if [ "$STATUS" = "success" ]; then
-            ICON="✅"
-            MSG="Deploy thành công!"
+          DOCKER_STATUS="${{ needs.docker.result }}"
+          DEPLOY_STATUS="${{ needs.deploy.result }}"
+          TAG="${{ needs.docker.outputs.tag }}"
+
+          if [ "$DOCKER_STATUS" = "success" ] && [ "$DEPLOY_STATUS" = "success" ]; then
+            ICON="✅"; MSG="Deploy thành công!"
           else
-            ICON="❌"
-            MSG="Deploy THẤT BẠI!"
+            ICON="❌"; MSG="Deploy THẤT BẠI! (Docker: ${DOCKER_STATUS} | Deploy: ${DEPLOY_STATUS})"
           fi
 
-          COMMIT_MSG=$(git -C ${{ env.DEPLOY_DIR }} log -1 --pretty=format:"%s" 2>/dev/null || echo "N/A")
-          AUTHOR=$(git -C ${{ env.DEPLOY_DIR }} log -1 --pretty=format:"%an" 2>/dev/null || echo "N/A")
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          COMMIT_MSG=$(git -C ${{ env.DEPLOY_DIR }} log -1 --pretty=format:"%s")
+          AUTHOR=$(git -C ${{ env.DEPLOY_DIR }} log -1 --pretty=format:"%an")
 
           TEXT="${ICON} *AI Commerce — ${MSG}*
 
+          🐳 Docker Hub: \`hqdu/webbanhang-api:${TAG}\`
+          🌐 Web image: \`hqdu/webbanhang-web:${TAG}\`
           📌 Branch: \`${{ github.ref_name }}\`
-          🔖 Commit: \`${SHORT_SHA}\` — ${COMMIT_MSG}
+          🔖 Commit: \`${TAG}\` — ${COMMIT_MSG}
           👤 Author: ${AUTHOR}
-          ⏰ Time: $(TZ='Asia/Ho_Chi_Minh' date '+%Y-%m-%d %H:%M:%S') ICT
+          ⏰ $(TZ='Asia/Ho_Chi_Minh' date '+%Y-%m-%d %H:%M:%S') ICT
           🔗 [Xem workflow](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
 
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
