@@ -1,4 +1,4 @@
-.PHONY: up down logs build restart ps install dev
+.PHONY: up down logs build restart ps install dev dev-web
 
 # Khởi động toàn bộ stack
 up:
@@ -35,9 +35,13 @@ ps:
 install:
 	cd apps/api && npm install
 
-# Chạy dev mode (không dùng Docker)
+# Chạy API dev mode (không dùng Docker)
 dev:
 	cd apps/api && npm run start:dev
+
+# Chạy Web dev mode trên port 3005
+dev-web:
+	cd apps/web && npm run dev -- --port 3005
 
 # Khởi động infra (postgres, redis, minio, n8n, ollama) nhưng không chạy api
 infra:

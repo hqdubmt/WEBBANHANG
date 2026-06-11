@@ -45,7 +45,7 @@ export class KnowledgeBrainService {
       .addSelect('SUM(i.price * i.quantity)', 'revenue')
       .addSelect('SUM(i.quantity)', 'units')
       .groupBy('i.productId')
-      .orderBy('revenue', 'DESC')
+      .orderBy('SUM(i.price * i.quantity)', 'DESC')
       .limit(10)
       .getRawMany();
 
@@ -103,7 +103,7 @@ export class KnowledgeBrainService {
       .addSelect('COUNT(o.id)', 'orderCount')
       .where('o.status != :c', { c: OrderStatus.CANCELLED })
       .groupBy('o.customerId')
-      .orderBy('totalSpent', 'DESC')
+      .orderBy('SUM(o.total)', 'DESC')
       .limit(10)
       .getRawMany();
 
@@ -256,7 +256,7 @@ export class KnowledgeBrainService {
         .addSelect('AVG(l.durationMs)', 'avgMs')
         .setParameter('s', AgentRunStatus.FAILED)
         .groupBy('l.agent')
-        .orderBy('runs', 'DESC')
+        .orderBy('COUNT(*)', 'DESC')
         .getRawMany(),
     ]);
 

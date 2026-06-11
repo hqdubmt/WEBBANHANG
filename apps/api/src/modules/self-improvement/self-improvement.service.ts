@@ -430,11 +430,12 @@ export class SelfImprovementService {
     };
 
     if (existing) {
-      await this.scorecardRepo.update(existing.id, data);
+      await this.scorecardRepo.update(existing.id, data as any);
       return { ...existing, ...data };
     }
 
-    return this.scorecardRepo.save(this.scorecardRepo.create(data));
+    const entity = this.scorecardRepo.create(data as any) as unknown as PerformanceScorecard;
+    return this.scorecardRepo.save(entity);
   }
 
   async getTodayScorecard() {

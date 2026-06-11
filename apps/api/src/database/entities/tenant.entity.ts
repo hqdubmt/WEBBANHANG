@@ -41,7 +41,7 @@ export class Tenant {
   @Column('decimal', { precision: 12, scale: 2, default: 0 })
   monthlyRevenue: number;
 
-  @Column({ default: 99.9 })
+  @Column('decimal', { precision: 5, scale: 2, default: 99.9 })
   slaTarget: number;
 
   @Column('decimal', { precision: 5, scale: 2, default: 100 })

@@ -163,20 +163,36 @@ services:
       qdrant:
         condition: service_started
 
-  nginx:
-    image: nginx:alpine
-    container_name: commerce_nginx
+  # web và nginx chỉ dùng cho production (docker compose --profile prod up)
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: commerce_web
     restart: always
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/ssl:/etc/nginx/ssl:ro
+    profiles: ["prod"]
+    environment:
+      API_HOST: api
+      API_PORT: "3001"
     networks:
       - commerce_network
     depends_on:
       - api
+
+  nginx:
+    image: nginx:alpine
+    container_name: commerce_nginx
+    restart: always
+    profiles: ["prod"]
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - commerce_network
+    depends_on:
+      - api
+      - web
 
   prometheus:
     image: prom/prometheus:latest
