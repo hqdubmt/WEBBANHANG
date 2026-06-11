@@ -1,0 +1,38 @@
+name: CICD + NodeJs +  Docker
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: [ubuntu-latest]
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Created file .env
+        run: |
+          touch .env
+          echo ${{ secrets.PROD_ENV }} > .env        
+      - name: Login to docker hub
+        # run: docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }} 
+        run: echo ${{ secrets.DOCKER_HUB_PASSWORD }} | docker login -u ${{ secrets.DOCKER_HUB_USERNAME }} --password-stdin
+      - name: Build docker image
+        run: docker build -t ${{ secrets.DOCKER_HUB_USERNAME }}/class_ci-cd .
+      - name: Publish image to docker hub
+        run: docker push ${{ secrets.DOCKER_HUB_USERNAME }}/class_ci-cd:latest
+        
+  deploy:
+    needs: build
+    runs-on: [Linux]
+    steps:
+      - name: Pull latest source code
+        uses: actions/checkout@v2    
+      - name: Pull image from docker hub
+        run: docker pull ${{ secrets.DOCKER_HUB_USERNAME }}/class_ci-cd:latest
+      - name: Delete old container || If not exit it will not error when we have options is true
+        run: docker rm -f class_ci-cd || true
+      - name: Run docker container
+        run: docker run -d -p ${{secrets.PORT_RUN_CONTAINER}} --name class_ci-cd ${{ secrets.DOCKER_HUB_USERNAME }}/class_ci-cd

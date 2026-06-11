@@ -1,0 +1,103 @@
+name: 🚀 Deploy AI Commerce
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:       # cho phép chạy thủ công trên GitHub
+
+env:
+  DEPLOY_DIR: /home/hqdu/quangdu/webbanhang
+
+jobs:
+  # ─────────────────────────────────────────
+  # JOB 1: Build & Deploy (self-hosted VPS)
+  # ─────────────────────────────────────────
+  deploy:
+    name: Build & Deploy
+    runs-on: [self-hosted, Linux]
+    timeout-minutes: 20
+
+    steps:
+      # 1. Lấy code mới nhất về deploy directory
+      - name: 📥 Pull latest code
+        run: |
+          git -C ${{ env.DEPLOY_DIR }} fetch --all
+          git -C ${{ env.DEPLOY_DIR }} reset --hard origin/main
+
+      # 2. Tạo file .env từ GitHub Secret
+      - name: 🔐 Create .env
+        run: |
+          echo "${{ secrets.PROD_ENV }}" > ${{ env.DEPLOY_DIR }}/.env
+
+      # ── BUILD API (NestJS) ────────────────
+      - name: 📦 Install API dependencies
+        working-directory: ${{ env.DEPLOY_DIR }}/apps/api
+        run: npm ci --prefer-offline
+
+      - name: 🔨 Build API
+        working-directory: ${{ env.DEPLOY_DIR }}/apps/api
+        run: npm run build
+
+      # ── BUILD WEB (Next.js) ───────────────
+      - name: 📦 Install Web dependencies
+        working-directory: ${{ env.DEPLOY_DIR }}/apps/web
+        run: npm ci --prefer-offline
+
+      - name: 🔨 Build Web
+        working-directory: ${{ env.DEPLOY_DIR }}/apps/web
+        run: npm run build
+
+      # 3. Restart PM2
+      - name: ♻️  Restart API via PM2
+        run: npx pm2 restart commerce-api --update-env
+
+      - name: ♻️  Restart Web via PM2
+        run: npx pm2 restart commerce-web --update-env
+
+      - name: 💾 Save PM2 state
+        run: npx pm2 save
+
+      # 4. Health check đơn giản
+      - name: 🏥 Health check
+        run: |
+          sleep 5
+          curl -sf http://localhost:3002/health || echo "⚠️  API health check failed (non-blocking)"
+
+  # ─────────────────────────────────────────
+  # JOB 2: Thông báo Telegram
+  # ─────────────────────────────────────────
+  notify:
+    name: Telegram Notify
+    runs-on: [self-hosted, Linux]
+    needs: deploy
+    if: always()    # chạy dù deploy thành công hay thất bại
+
+    steps:
+      - name: 📣 Send Telegram notification
+        run: |
+          STATUS="${{ needs.deploy.result }}"
+          if [ "$STATUS" = "success" ]; then
+            ICON="✅"
+            MSG="Deploy thành công!"
+          else
+            ICON="❌"
+            MSG="Deploy THẤT BẠI!"
+          fi
+
+          COMMIT_MSG=$(git -C ${{ env.DEPLOY_DIR }} log -1 --pretty=format:"%s" 2>/dev/null || echo "N/A")
+          AUTHOR=$(git -C ${{ env.DEPLOY_DIR }} log -1 --pretty=format:"%an" 2>/dev/null || echo "N/A")
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+
+          TEXT="${ICON} *AI Commerce — ${MSG}*
+
+          📌 Branch: \`${{ github.ref_name }}\`
+          🔖 Commit: \`${SHORT_SHA}\` — ${COMMIT_MSG}
+          👤 Author: ${AUTHOR}
+          ⏰ Time: $(TZ='Asia/Ho_Chi_Minh' date '+%Y-%m-%d %H:%M:%S') ICT
+          🔗 [Xem workflow](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="${TEXT}" \
+            -d parse_mode="Markdown" \
+            -d disable_web_page_preview=true
