@@ -56,6 +56,23 @@ import { VideoOptimizerModule } from './modules/agents/video-optimizer/video-opt
 import { CompetitorMonitorModule } from './modules/agents/competitor-monitor/competitor-monitor.module';
 import { DemandForecasterModule } from './modules/agents/demand-forecaster/demand-forecaster.module';
 import { RepricingModule } from './modules/agents/repricing/repricing.module';
+// V5 Core
+import { EnterpriseModule } from './modules/enterprise/enterprise.module';
+import { WhiteLabelModule } from './modules/white-label/white-label.module';
+import { MobileModule } from './modules/mobile/mobile.module';
+// V5 Agents
+import { MarketplaceOptimizerModule } from './modules/agents/marketplace-optimizer/marketplace-optimizer.module';
+import { MobileEngagementModule } from './modules/agents/mobile-engagement/mobile-engagement.module';
+import { EnterpriseHealthModule } from './modules/agents/enterprise-health/enterprise-health.module';
+import { WhitelabelOnboardingModule } from './modules/agents/whitelabel-onboarding/whitelabel-onboarding.module';
+// BOS — Business Operating System
+import { BusinessOsModule } from './modules/business-os/business-os.module';
+// Knowledge Brain
+import { KnowledgeBrainModule } from './modules/knowledge-brain/knowledge-brain.module';
+// AI Board of Directors
+import { AiBoardModule } from './modules/ai-board/ai-board.module';
+// Self-Improvement Loop
+import { SelfImprovementModule } from './modules/self-improvement/self-improvement.module';
 
 @Module({
   imports: [
@@ -121,6 +138,23 @@ import { RepricingModule } from './modules/agents/repricing/repricing.module';
     CompetitorMonitorModule,
     DemandForecasterModule,
     RepricingModule,
+    // V5 Core
+    EnterpriseModule,
+    WhiteLabelModule,
+    MobileModule,
+    // V5 Agents
+    MarketplaceOptimizerModule,
+    MobileEngagementModule,
+    EnterpriseHealthModule,
+    WhitelabelOnboardingModule,
+    // BOS
+    BusinessOsModule,
+    // Knowledge Brain
+    KnowledgeBrainModule,
+    // AI Board of Directors
+    AiBoardModule,
+    // Self-Improvement Loop
+    SelfImprovementModule,
     // WebSocket
     GatewayModule,
   ],

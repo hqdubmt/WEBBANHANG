@@ -19,6 +19,20 @@ export enum KnowledgeStatus {
   PENDING = 'pending',
 }
 
+export enum KnowledgeDomain {
+  PRODUCT = 'product',
+  CUSTOMER = 'customer',
+  BUSINESS = 'business',
+  MARKET = 'market',
+  OPERATIONAL = 'operational',
+}
+
+export enum KnowledgeTier {
+  SHORT_TERM = 'short_term',
+  MEDIUM_TERM = 'medium_term',
+  LONG_TERM = 'long_term',
+}
+
 @Entity('knowledge')
 export class Knowledge {
   @PrimaryGeneratedColumn('uuid')
@@ -56,6 +70,30 @@ export class Knowledge {
 
   @Column({ type: 'timestamptz', nullable: true })
   indexedAt: Date;
+
+  @Column({ type: 'enum', enum: KnowledgeDomain, nullable: true })
+  domain: KnowledgeDomain;
+
+  @Column({ type: 'enum', enum: KnowledgeTier, default: KnowledgeTier.MEDIUM_TERM })
+  tier: KnowledgeTier;
+
+  @Column({ type: 'int', default: 100 })
+  accuracy: number;
+
+  @Column({ type: 'int', default: 100 })
+  completeness: number;
+
+  @Column({ type: 'int', default: 100 })
+  freshness: number;
+
+  @Column({ type: 'int', default: 50 })
+  businessValue: number;
+
+  @Column('jsonb', { nullable: true })
+  relationIds: string[];
+
+  @Column({ type: 'timestamptz', nullable: true })
+  expiresAt: Date;
 
   @Column('jsonb', { nullable: true })
   tags: string[];

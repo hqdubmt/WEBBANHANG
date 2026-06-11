@@ -32,6 +32,18 @@ import { AffiliatePartner } from './entities/affiliate-partner.entity';
 import { AffiliateClick } from './entities/affiliate-click.entity';
 import { AffiliateConversion } from './entities/affiliate-conversion.entity';
 import { SupplierProduct } from './entities/supplier-product.entity';
+// V5 entities
+import { Tenant } from './entities/tenant.entity';
+import { WhiteLabelClient } from './entities/white-label-client.entity';
+import { MarketplaceVendor } from './entities/marketplace-vendor.entity';
+import { MarketplaceDispute } from './entities/marketplace-dispute.entity';
+import { MobileSession } from './entities/mobile-session.entity';
+// V6 Self-Improvement Loop
+import { LearningCycle } from './entities/learning-cycle.entity';
+import { LessonLearned } from './entities/lesson-learned.entity';
+import { DecisionMemory } from './entities/decision-memory.entity';
+import { Experiment } from './entities/experiment.entity';
+import { PerformanceScorecard } from './entities/performance-scorecard.entity';
 
 @Module({
   imports: [
@@ -52,6 +64,10 @@ import { SupplierProduct } from './entities/supplier-product.entity';
         // V4
         DropshipProduct, DropshipOrder, AffiliatePartner, AffiliateClick,
         AffiliateConversion, SupplierProduct,
+        // V5
+        Tenant, WhiteLabelClient, MarketplaceVendor, MarketplaceDispute, MobileSession,
+        // V6 Self-Improvement Loop
+        LearningCycle, LessonLearned, DecisionMemory, Experiment, PerformanceScorecard,
       ],
       synchronize: process.env.NODE_ENV !== 'production',
       logging: process.env.NODE_ENV === 'development',

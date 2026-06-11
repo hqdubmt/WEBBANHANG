@@ -9,6 +9,9 @@ export enum RagCollection {
   ORDERS = 'orders',
   AFFILIATE = 'affiliate',
   MARKETING = 'marketing',
+  BUSINESS = 'business',
+  MARKET = 'market',
+  OPERATIONAL = 'operational',
 }
 
 interface SearchResult {

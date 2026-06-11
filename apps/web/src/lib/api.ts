@@ -202,6 +202,105 @@ export const marketplaceApi = {
   generateLink: (url: string) => api.post<any>('/marketplace/affiliate-link', { url }),
 };
 
+// Enterprise (V5)
+export const enterpriseApi = {
+  list: () => api.get<any[]>('/enterprise'),
+  stats: () => api.get<any>('/enterprise/stats'),
+  get: (id: string) => api.get<any>(`/enterprise/${id}`),
+  create: (data: any) => api.post<any>('/enterprise', data),
+  update: (id: string, data: any) => api.patch<any>(`/enterprise/${id}`, data),
+  updateUptime: (id: string, uptimePercent: number) => api.patch<any>(`/enterprise/${id}/uptime`, { uptimePercent }),
+  delete: (id: string) => api.delete<any>(`/enterprise/${id}`),
+  agentStats: () => api.get<any>('/agents/enterprise-health/stats'),
+  agentRun: () => api.post<any>('/agents/enterprise-health/run'),
+};
+
+// White Label (V5)
+export const whiteLabelApi = {
+  list: () => api.get<any[]>('/white-label'),
+  stats: () => api.get<any>('/white-label/stats'),
+  get: (id: string) => api.get<any>(`/white-label/${id}`),
+  create: (data: any) => api.post<any>('/white-label', data),
+  update: (id: string, data: any) => api.patch<any>(`/white-label/${id}`, data),
+  completeOnboarding: (id: string) => api.post<any>(`/white-label/${id}/complete-onboarding`),
+  delete: (id: string) => api.delete<any>(`/white-label/${id}`),
+  agentStats: () => api.get<any>('/agents/whitelabel-onboarding/stats'),
+  agentRun: () => api.post<any>('/agents/whitelabel-onboarding/run'),
+};
+
+// Mobile (V5)
+export const mobileApi = {
+  stats: () => api.get<any>('/mobile/stats'),
+  retention: () => api.get<any>('/mobile/retention'),
+  agentStats: () => api.get<any>('/agents/mobile-engagement/stats'),
+  agentRun: () => api.post<any>('/agents/mobile-engagement/run'),
+};
+
+// Business OS (BOS)
+export const bosApi = {
+  dashboard: () => api.get<any>('/business-os/dashboard'),
+  funnel: () => api.get<any>('/business-os/funnel'),
+  kpi: () => api.get<any>('/business-os/kpi'),
+  intelligence: () => api.get<any>('/business-os/intelligence'),
+  priorities: () => api.get<any[]>('/business-os/priorities'),
+  plan: () => api.get<any>('/business-os/plan'),
+  questions: () => api.get<any>('/business-os/questions'),
+  dailyReport: () => api.get<any>('/business-os/report/daily'),
+  weeklyReport: () => api.get<any>('/business-os/report/weekly'),
+};
+
+// Knowledge Brain
+export const knowledgeBrainApi = {
+  dashboard: () => api.get<any>('/knowledge-brain/dashboard'),
+  productIntelligence: () => api.get<any>('/knowledge-brain/product-intelligence'),
+  customerIntelligence: () => api.get<any>('/knowledge-brain/customer-intelligence'),
+  businessIntelligence: () => api.get<any>('/knowledge-brain/business-intelligence'),
+  marketIntelligence: () => api.get<any>('/knowledge-brain/market-intelligence'),
+  operationalIntelligence: () => api.get<any>('/knowledge-brain/operational-intelligence'),
+  executiveQuestions: () => api.get<any[]>('/knowledge-brain/executive-questions'),
+  ask: (question: string, domains?: string[]) => api.post<any>('/knowledge-brain/ask', { question, domains }),
+  ingest: (data: any) => api.post<any>('/knowledge-brain/ingest', data),
+  stats: () => api.get<any>('/knowledge-brain/stats'),
+};
+
+// AI Board of Directors
+export const aiBoardApi = {
+  meeting: () => api.get<any>('/ai-board/meeting'),
+  ceo: () => api.get<any>('/ai-board/ceo'),
+  cfo: () => api.get<any>('/ai-board/cfo'),
+  coo: () => api.get<any>('/ai-board/coo'),
+  cto: () => api.get<any>('/ai-board/cto'),
+  cmo: () => api.get<any>('/ai-board/cmo'),
+  cro: () => api.get<any>('/ai-board/cro'),
+  cso: () => api.get<any>('/ai-board/cso'),
+};
+
+// Self-Improvement Loop
+export const selfImprovementApi = {
+  dashboard: () => api.get<any>('/self-improvement/dashboard'),
+  observe: () => api.get<any>('/self-improvement/observe'),
+  evaluate: () => api.get<any>('/self-improvement/evaluate'),
+  dailyLoop: () => api.get<any>('/self-improvement/daily-loop'),
+  weeklyRetrospective: () => api.get<any>('/self-improvement/weekly-retrospective'),
+  monthlyEvolution: () => api.get<any>('/self-improvement/monthly-evolution'),
+  improvementPlan: () => api.get<any>('/self-improvement/improvement-plan'),
+  scorecard: (period?: string) => api.get<any>(`/self-improvement/scorecard${period ? '?period=' + period : ''}`),
+  scorecardToday: () => api.get<any>('/self-improvement/scorecard/today'),
+  scorecardHistory: (period?: string, limit?: number) =>
+    api.get<any[]>(`/self-improvement/scorecard/history?${period ? 'period=' + period + '&' : ''}${limit ? 'limit=' + limit : ''}`),
+  decisions: (area?: string) => api.get<any[]>(`/self-improvement/decisions${area ? '?area=' + area : ''}`),
+  createDecision: (data: any) => api.post<any>('/self-improvement/decisions', data),
+  updateDecisionOutcome: (id: string, data: any) => api.put<any>(`/self-improvement/decisions/${id}/outcome`, data),
+  experiments: (status?: string) => api.get<any[]>(`/self-improvement/experiments${status ? '?status=' + status : ''}`),
+  createExperiment: (data: any) => api.post<any>('/self-improvement/experiments', data),
+  updateExperiment: (id: string, data: any) => api.put<any>(`/self-improvement/experiments/${id}`, data),
+  lessons: (type?: string, domain?: string) =>
+    api.get<any[]>(`/self-improvement/lessons?${type ? 'type=' + type + '&' : ''}${domain ? 'domain=' + domain : ''}`),
+  winningStrategies: () => api.get<any[]>('/self-improvement/lessons/winning-strategies'),
+  failedStrategies: () => api.get<any[]>('/self-improvement/lessons/failed-strategies'),
+  provenPatterns: () => api.get<any[]>('/self-improvement/lessons/proven-patterns'),
+};
+
 // Users (RBAC)
 export const usersApi = {
   list: (params?: Record<string, any>) => {

@@ -68,7 +68,7 @@ export default function DashboardPage() {
     <div>
       <PageHeader
         title="Dashboard"
-        subtitle="AI Social Commerce OS V3 — Tổng quan hệ thống"
+        subtitle="Business Operating System — AI Social Commerce OS"
       />
 
       {/* KPI Cards */}
@@ -141,7 +141,7 @@ export default function DashboardPage() {
       {/* Quick links */}
       <div className="mt-5 grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
-          { href: '/products', label: 'Quản lý sản phẩm', icon: '📦', color: 'bg-blue-500' },
+          { href: '/business-os', label: 'Business OS', icon: '🧠', color: 'bg-indigo-600' },
           { href: '/orders', label: 'Xem đơn hàng', icon: '🛒', color: 'bg-green-500' },
           { href: '/leads', label: 'Danh sách leads', icon: '🎯', color: 'bg-yellow-500' },
           { href: '/analytics', label: 'Phân tích chi tiết', icon: '📈', color: 'bg-purple-500' },

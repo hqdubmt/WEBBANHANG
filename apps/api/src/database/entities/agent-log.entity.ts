@@ -46,6 +46,15 @@ export enum AgentName {
   DEMAND_FORECASTER = 'demand_forecaster',
   // Agent 20
   REPRICING = 'repricing',
+  // V5 Agents
+  // Agent 22
+  MARKETPLACE_OPTIMIZER = 'marketplace_optimizer',
+  // Agent 23
+  MOBILE_ENGAGEMENT = 'mobile_engagement',
+  // Agent 24
+  ENTERPRISE_HEALTH = 'enterprise_health',
+  // Agent 25
+  WHITELABEL_ONBOARDING = 'whitelabel_onboarding',
 }
 
 export enum AgentRunStatus {

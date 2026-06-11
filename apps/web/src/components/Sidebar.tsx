@@ -6,6 +6,10 @@ import Logo from '@/components/Logo';
 
 const NAV = [
   { href: '/', label: 'Dashboard', icon: '📊' },
+  { href: '/ai-board', label: 'AI Board', icon: '👔' },
+  { href: '/business-os', label: 'Business OS', icon: '🧠' },
+  { href: '/knowledge-brain', label: 'Knowledge Brain', icon: '💡' },
+  { href: '/self-improvement', label: 'Self-Improvement', icon: '🔄' },
   // Core Commerce
   { href: '/products', label: 'Sản phẩm', icon: '📦' },
   { href: '/orders', label: 'Đơn hàng', icon: '🛒' },
@@ -21,6 +25,10 @@ const NAV = [
   { href: '/dropship', label: 'Dropship', icon: '🚚' },
   { href: '/affiliates', label: 'Affiliate', icon: '🤝' },
   { href: '/marketplace', label: 'Marketplace', icon: '🛍' },
+  // V5 — Enterprise & Growth
+  { href: '/enterprise', label: 'Enterprise', icon: '🏢' },
+  { href: '/white-label', label: 'White Label', icon: '🎨' },
+  { href: '/mobile-metrics', label: 'Mobile App', icon: '📱' },
   // AI & Analytics
   { href: '/agents', label: 'AI Agents', icon: '🤖' },
   { href: '/analytics', label: 'Phân tích', icon: '📈' },
