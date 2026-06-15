@@ -1,7 +1,8 @@
 import {
   Entity, PrimaryGeneratedColumn, Column,
-  CreateDateColumn, UpdateDateColumn,
+  CreateDateColumn, UpdateDateColumn, Index, ManyToOne, JoinColumn,
 } from 'typeorm';
+import { Category } from './category.entity';
 
 export enum ProductSource {
   SHOPEE = 'shopee',
@@ -16,6 +17,8 @@ export enum ProductStatus {
   PENDING = 'pending',
 }
 
+@Index(['status', 'source'])
+@Index(['status', 'trendScore'])
 @Entity('products')
 export class Product {
   @PrimaryGeneratedColumn('uuid')
@@ -25,7 +28,17 @@ export class Product {
   name: string;
 
   @Column({ nullable: true })
+  sku: string;
+
+  @Column({ nullable: true })
   category: string;
+
+  @Column({ nullable: true })
+  categoryId: string;
+
+  @ManyToOne(() => Category, { nullable: true })
+  @JoinColumn({ name: 'categoryId' })
+  categoryRef: Category;
 
   @Column('text', { nullable: true })
   description: string;
@@ -33,11 +46,17 @@ export class Product {
   @Column('decimal', { precision: 15, scale: 2, default: 0 })
   price: number;
 
+  @Column('decimal', { precision: 15, scale: 2, default: 0 })
+  costPrice: number;
+
   @Column({ nullable: true })
   image: string;
 
   @Column({ default: 0 })
   stock: number;
+
+  @Column({ default: 0 })
+  lowStockThreshold: number;
 
   @Column({ type: 'enum', enum: ProductSource, default: ProductSource.MANUAL })
   source: ProductSource;

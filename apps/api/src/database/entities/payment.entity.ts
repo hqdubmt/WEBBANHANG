@@ -1,6 +1,6 @@
 import {
   Entity, PrimaryGeneratedColumn, Column,
-  CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn,
+  CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn, Index,
 } from 'typeorm';
 import { Order } from './order.entity';
 
@@ -21,6 +21,8 @@ export enum PaymentMethod {
   CREDIT_CARD = 'credit_card',
 }
 
+@Index(['orderId'])
+@Index(['status'])
 @Entity('payments')
 export class Payment {
   @PrimaryGeneratedColumn('uuid')

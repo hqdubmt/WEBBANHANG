@@ -1,11 +1,18 @@
 import { Controller, Get, Post, Param, Body, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { Public } from '../auth/auth.guard';
 import { PaymentsService } from './payments.service';
+import { PaymentGatewayService } from './payment-gateway.service';
 
 @ApiTags('Payments')
 @Controller('payments')
 export class PaymentsController {
-  constructor(private readonly service: PaymentsService) {}
+  constructor(
+    private readonly service: PaymentsService,
+    private readonly gateway: PaymentGatewayService,
+  ) {}
+
+  // ─── Existing ────────────────────────────────────────────────────────────
 
   @Get()
   @ApiOperation({ summary: 'Danh sách thanh toán' })
@@ -39,7 +46,10 @@ export class PaymentsController {
 
   @Post(':id/confirm')
   @ApiOperation({ summary: 'Xác nhận thanh toán thành công' })
-  confirm(@Param('id') id: string, @Body() body: { transactionId?: string; gatewayResponse?: Record<string, any> }) {
+  confirm(
+    @Param('id') id: string,
+    @Body() body: { transactionId?: string; gatewayResponse?: Record<string, any> },
+  ) {
     return this.service.confirmPayment(id, body.transactionId, body.gatewayResponse);
   }
 
@@ -47,5 +57,59 @@ export class PaymentsController {
   @ApiOperation({ summary: 'Hoàn tiền' })
   refund(@Param('id') id: string, @Body() body: { note?: string }) {
     return this.service.refund(id, body.note);
+  }
+
+  // ─── EPIC 07 F02: Payment Gateways ───────────────────────────────────────
+
+  @Post('vnpay/create-url')
+  @ApiOperation({ summary: 'VNPay — tạo URL thanh toán (HMAC-SHA512)' })
+  vnpayCreate(
+    @Body() body: {
+      orderId: string;
+      amount: number;
+      orderInfo: string;
+      returnUrl: string;
+      ipAddr?: string;
+    },
+  ) {
+    return this.gateway.createVnpayUrl(body);
+  }
+
+  @Get('vnpay/return')
+  @Public()
+  @ApiOperation({ summary: 'VNPay — xác thực return URL sau thanh toán' })
+  vnpayReturn(@Query() query: Record<string, string>) {
+    const valid = this.gateway.verifyVnpayReturn(query);
+    return { valid, responseCode: query['vnp_ResponseCode'] };
+  }
+
+  @Post('momo/create')
+  @ApiOperation({ summary: 'MoMo — tạo payment request (QR + deeplink)' })
+  momoCreate(
+    @Body() body: {
+      orderId: string;
+      amount: number;
+      orderInfo: string;
+      returnUrl: string;
+      notifyUrl: string;
+    },
+  ) {
+    return this.gateway.createMomoPayment(body);
+  }
+
+  @Post('momo/ipn')
+  @Public()
+  @ApiOperation({ summary: 'MoMo — nhận IPN (Instant Payment Notification)' })
+  momoIpn(@Body() body: Record<string, any>) {
+    const valid = this.gateway.verifyMomoIpn(body);
+    return { valid };
+  }
+
+  @Post('cod/confirm')
+  @ApiOperation({ summary: 'COD — xác nhận thu tiền mặt' })
+  codConfirm(@Body() body: { orderId: string; amount: number }) {
+    const ref = this.gateway.createCodReference(body.orderId);
+    return this.service.createPayment(body.orderId, 'cod', body.amount)
+      .then((payment) => ({ ...payment, codReference: ref }));
   }
 }

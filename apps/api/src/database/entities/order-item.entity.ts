@@ -1,9 +1,12 @@
 import {
   Entity, PrimaryGeneratedColumn, Column,
-  ManyToOne, JoinColumn,
+  ManyToOne, JoinColumn, Index, CreateDateColumn, UpdateDateColumn,
 } from 'typeorm';
 import { Order } from './order.entity';
+import { Product } from './product.entity';
 
+@Index(['orderId'])
+@Index(['productId'])
 @Entity('order_items')
 export class OrderItem {
   @PrimaryGeneratedColumn('uuid')
@@ -18,6 +21,10 @@ export class OrderItem {
 
   @Column()
   productId: string;
+
+  @ManyToOne(() => Product, { nullable: true })
+  @JoinColumn({ name: 'productId' })
+  product: Product;
 
   @Column({ nullable: true })
   productName: string;
@@ -39,4 +46,10 @@ export class OrderItem {
 
   @Column('decimal', { precision: 5, scale: 2, default: 0 })
   commission: number;
+
+  @CreateDateColumn()
+  createdAt: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
 }

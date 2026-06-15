@@ -1,8 +1,11 @@
 import {
   Entity, PrimaryGeneratedColumn, Column,
-  CreateDateColumn,
+  CreateDateColumn, Index,
 } from 'typeorm';
 
+@Index(['partnerId', 'createdAt'])
+@Index(['referralCode', 'createdAt'])
+@Index(['converted'])
 @Entity('affiliate_clicks')
 export class AffiliateClick {
   @PrimaryGeneratedColumn('uuid')

@@ -13,6 +13,8 @@ import { AiModule } from '../ai/ai.module';
 import { RagModule } from '../rag/rag.module';
 import { KnowledgeBrainService } from './knowledge-brain.service';
 import { KnowledgeBrainController } from './knowledge-brain.controller';
+import { DbDiscoveryService } from './db-discovery.service';
+import { ApiDiscoveryService } from './api-discovery.service';
 
 @Module({
   imports: [
@@ -23,8 +25,8 @@ import { KnowledgeBrainController } from './knowledge-brain.controller';
     AiModule,
     RagModule,
   ],
-  providers: [KnowledgeBrainService],
+  providers: [KnowledgeBrainService, DbDiscoveryService, ApiDiscoveryService],
   controllers: [KnowledgeBrainController],
-  exports: [KnowledgeBrainService],
+  exports: [KnowledgeBrainService, DbDiscoveryService, ApiDiscoveryService],
 })
 export class KnowledgeBrainModule {}

@@ -1,6 +1,6 @@
 import {
   Entity, PrimaryGeneratedColumn, Column, ManyToOne,
-  OneToMany, CreateDateColumn, UpdateDateColumn, JoinColumn,
+  OneToMany, CreateDateColumn, UpdateDateColumn, JoinColumn, Index,
 } from 'typeorm';
 import { Customer } from './customer.entity';
 import { OrderItem } from './order-item.entity';
@@ -21,6 +21,8 @@ export enum OrderSource {
   MANUAL = 'manual',
 }
 
+@Index(['customerId', 'status'])
+@Index(['status', 'createdAt'])
 @Entity('orders')
 export class Order {
   @PrimaryGeneratedColumn('uuid')
@@ -59,6 +61,21 @@ export class Order {
 
   @Column('text', { nullable: true })
   shippingAddress: string;
+
+  @Column({ nullable: true })
+  shippingMethod: string;
+
+  @Column({ nullable: true })
+  trackingNumber: string;
+
+  @Column('decimal', { precision: 15, scale: 2, default: 0 })
+  shippingCost: number;
+
+  @Column({ nullable: true })
+  couponCode: string;
+
+  @Column({ nullable: true })
+  assignedTo: string;
 
   @CreateDateColumn()
   createdAt: Date;

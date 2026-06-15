@@ -1,6 +1,6 @@
 import {
   Entity, PrimaryGeneratedColumn, Column,
-  CreateDateColumn, UpdateDateColumn,
+  CreateDateColumn, UpdateDateColumn, Index,
 } from 'typeorm';
 
 export enum ContentPlatform {
@@ -17,6 +17,8 @@ export enum ContentStatus {
   FAILED = 'failed',
 }
 
+@Index(['productId', 'status'])
+@Index(['platform', 'status'])
 @Entity('contents')
 export class Content {
   @PrimaryGeneratedColumn('uuid')

@@ -1,6 +1,6 @@
 import {
   Entity, PrimaryGeneratedColumn, Column,
-  CreateDateColumn, UpdateDateColumn,
+  CreateDateColumn, UpdateDateColumn, Index,
 } from 'typeorm';
 
 export enum LeadPlatform {
@@ -19,6 +19,8 @@ export enum LeadStatus {
   LOST = 'lost',
 }
 
+@Index(['status', 'platform'])
+@Index(['status', 'createdAt'])
 @Entity('leads')
 export class Lead {
   @PrimaryGeneratedColumn('uuid')
@@ -47,6 +49,12 @@ export class Lead {
 
   @Column({ nullable: true })
   customerId: string;
+
+  @Column({ nullable: true })
+  assignedTo: string;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  followUpAt: Date;
 
   @Column('jsonb', { nullable: true })
   meta: Record<string, any>;

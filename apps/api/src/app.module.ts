@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { BullModule } from '@nestjs/bull';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 import { DatabaseModule } from './database/database.module';
 import { ProductsModule } from './modules/products/products.module';
 import { CustomersModule } from './modules/customers/customers.module';
@@ -73,10 +75,22 @@ import { KnowledgeBrainModule } from './modules/knowledge-brain/knowledge-brain.
 import { AiBoardModule } from './modules/ai-board/ai-board.module';
 // Self-Improvement Loop
 import { SelfImprovementModule } from './modules/self-improvement/self-improvement.module';
+// EPIC 03: AI Chatbox
+import { ChatModule } from './modules/chat/chat.module';
+// EPIC 04: Omnichannel Inbox
+import { InboxModule } from './modules/inbox/inbox.module';
+// EPIC 06: Sales Automation Engine
+import { SalesModule } from './modules/sales/sales.module';
+// EPIC 12: Marketing Orchestrator
+import { MarketingOrchestratorModule } from './modules/marketing-orchestrator/marketing-orchestrator.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
+    ThrottlerModule.forRoot([
+      { name: 'short', ttl: 1000, limit: 10 },
+      { name: 'long', ttl: 60000, limit: 200 },
+    ]),
     ScheduleModule.forRoot(),
     BullModule.forRoot({
       redis: {
@@ -155,8 +169,19 @@ import { SelfImprovementModule } from './modules/self-improvement/self-improveme
     AiBoardModule,
     // Self-Improvement Loop
     SelfImprovementModule,
+    // EPIC 03: AI Chatbox
+    ChatModule,
+    // EPIC 04: Omnichannel Inbox
+    InboxModule,
+    // EPIC 06: Sales Automation Engine
+    SalesModule,
+    // EPIC 12: Marketing Orchestrator
+    MarketingOrchestratorModule,
     // WebSocket
     GatewayModule,
+  ],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule {}

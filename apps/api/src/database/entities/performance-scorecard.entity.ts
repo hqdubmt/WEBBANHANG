@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, Index } from 'typeorm';
 
 export enum ScorecardPeriod {
   DAILY = 'daily',
@@ -6,6 +6,7 @@ export enum ScorecardPeriod {
   MONTHLY = 'monthly',
 }
 
+@Index(['period', 'periodDate'], { unique: true })
 @Entity('performance_scorecards')
 export class PerformanceScorecard {
   @PrimaryGeneratedColumn('uuid')

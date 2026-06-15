@@ -1,5 +1,5 @@
 import {
-  Entity, PrimaryGeneratedColumn, Column, CreateDateColumn,
+  Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, Index,
 } from 'typeorm';
 
 export enum AgentName {
@@ -63,6 +63,8 @@ export enum AgentRunStatus {
   RUNNING = 'running',
 }
 
+@Index(['agent', 'createdAt'])
+@Index(['status', 'createdAt'])
 @Entity('agent_logs')
 export class AgentLog {
   @PrimaryGeneratedColumn('uuid')

@@ -1,6 +1,6 @@
 import {
   Entity, PrimaryGeneratedColumn, Column,
-  CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn,
+  CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn, Index,
 } from 'typeorm';
 import { Product } from './product.entity';
 
@@ -11,6 +11,8 @@ export enum InventoryTxType {
   RETURN = 'return',
 }
 
+@Index(['productId', 'createdAt'])
+@Index(['txType', 'createdAt'])
 @Entity('inventory')
 export class Inventory {
   @PrimaryGeneratedColumn('uuid')

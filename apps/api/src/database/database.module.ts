@@ -44,6 +44,17 @@ import { LessonLearned } from './entities/lesson-learned.entity';
 import { DecisionMemory } from './entities/decision-memory.entity';
 import { Experiment } from './entities/experiment.entity';
 import { PerformanceScorecard } from './entities/performance-scorecard.entity';
+// V7 Database fixes — indexes, missing tables
+import { CustomerSegment } from './entities/customer-segment.entity';
+import { RevenueSnapshot } from './entities/revenue-snapshot.entity';
+import { AuditLog } from './entities/audit-log.entity';
+import { Notification } from './entities/notification.entity';
+import { Coupon } from './entities/coupon.entity';
+import { ProductVariant } from './entities/product-variant.entity';
+import { AiDecision } from './entities/ai-decision.entity';
+// EPIC 04 Omnichannel Inbox
+import { InboxConversation } from './entities/inbox-conversation.entity';
+import { InboxMessage } from './entities/inbox-message.entity';
 
 @Module({
   imports: [
@@ -52,7 +63,7 @@ import { PerformanceScorecard } from './entities/performance-scorecard.entity';
       host: process.env.POSTGRES_HOST || 'localhost',
       port: parseInt(process.env.POSTGRES_PORT || '5432'),
       username: process.env.POSTGRES_USER || 'commerce_user',
-      password: process.env.POSTGRES_PASSWORD || 'commerce_pass_2024',
+      password: process.env.POSTGRES_PASSWORD,
       database: process.env.POSTGRES_DB || 'ai_commerce',
       entities: [
         // V1 + V2
@@ -68,9 +79,16 @@ import { PerformanceScorecard } from './entities/performance-scorecard.entity';
         Tenant, WhiteLabelClient, MarketplaceVendor, MarketplaceDispute, MobileSession,
         // V6 Self-Improvement Loop
         LearningCycle, LessonLearned, DecisionMemory, Experiment, PerformanceScorecard,
+        // V7 Database fixes
+        CustomerSegment, RevenueSnapshot, AuditLog, Notification, Coupon,
+        ProductVariant, AiDecision,
+        // EPIC 04 Omnichannel Inbox
+        InboxConversation, InboxMessage,
       ],
       synchronize: process.env.NODE_ENV !== 'production',
       logging: process.env.NODE_ENV === 'development',
+      migrations: ['dist/database/migrations/*.js'],
+      migrationsTableName: 'typeorm_migrations',
     }),
   ],
   exports: [TypeOrmModule],
