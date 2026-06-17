@@ -61,7 +61,7 @@ export class Product {
   @Column({ type: 'enum', enum: ProductSource, default: ProductSource.MANUAL })
   source: ProductSource;
 
-  @Column({ nullable: true })
+  @Column({ nullable: true, unique: true })
   sourceId: string;
 
   @Column({ nullable: true })

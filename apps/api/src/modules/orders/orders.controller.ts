@@ -1,9 +1,12 @@
 import { Controller, Get, Post, Put, Patch, Delete, Param, Body, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { OrdersService } from './orders.service';
 import { OrderAutomationService } from './order-automation.service';
 import { FulfillmentService } from './fulfillment.service';
 import { OrderStatus } from '../../database/entities/order.entity';
+import { Notification, NotificationStatus } from '../../database/entities/notification.entity';
 
 @ApiTags('Orders')
 @Controller('orders')
@@ -12,6 +15,7 @@ export class OrdersController {
     private readonly service: OrdersService,
     private readonly automation: OrderAutomationService,
     private readonly fulfillment: FulfillmentService,
+    @InjectRepository(Notification) private readonly notifRepo: Repository<Notification>,
   ) {}
 
   // ─── Existing ────────────────────────────────────────────────────────────
@@ -39,6 +43,12 @@ export class OrdersController {
     return this.service.getRevenueSummary(days);
   }
 
+  @Get('stats')
+  @ApiOperation({ summary: 'Thống kê đơn hàng tổng quan' })
+  stats() {
+    return this.automation.getOrderStats();
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Chi tiết đơn hàng' })
   findOne(@Param('id') id: string) {
@@ -46,9 +56,9 @@ export class OrdersController {
   }
 
   @Put(':id/status')
-  @ApiOperation({ summary: 'Cập nhật trạng thái đơn hàng' })
+  @ApiOperation({ summary: 'Cập nhật trạng thái đơn hàng (có trừ/hoàn kho tự động)' })
   updateStatus(@Param('id') id: string, @Body('status') status: OrderStatus) {
-    return this.service.updateStatus(id, status);
+    return this.fulfillment.setStatus(id, status);
   }
 
   // ─── EPIC 07 F01: Order Management ───────────────────────────────────────
@@ -104,5 +114,34 @@ export class OrdersController {
   @ApiOperation({ summary: 'Fulfillment dashboard — tổng quan trạng thái giao hàng' })
   fulfillmentStatus() {
     return this.fulfillment.getFulfillmentStatus();
+  }
+
+  // ─── Admin notifications ─────────────────────────────────────────────────
+
+  @Get('notifications/admin')
+  @ApiOperation({ summary: 'Lấy thông báo admin (đơn hàng mới, v.v.)' })
+  async getAdminNotifications(@Query('limit') limit?: string) {
+    const take = Math.min(50, Number(limit) || 20);
+    const items = await this.notifRepo.find({
+      where: { recipientType: 'admin' },
+      order: { createdAt: 'DESC' },
+      take,
+    });
+    const unread = await this.notifRepo.count({
+      where: { recipientType: 'admin', status: NotificationStatus.SENT },
+    });
+    return { items, unread };
+  }
+
+  @Patch('notifications/admin/read-all')
+  @ApiOperation({ summary: 'Đánh dấu tất cả thông báo admin đã đọc' })
+  async markAllRead() {
+    await this.notifRepo
+      .createQueryBuilder()
+      .update()
+      .set({ status: NotificationStatus.READ, readAt: new Date() })
+      .where('recipientType = :t AND status = :s', { t: 'admin', s: NotificationStatus.SENT })
+      .execute();
+    return { ok: true };
   }
 }

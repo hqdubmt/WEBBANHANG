@@ -149,7 +149,7 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       MINIO_ENDPOINT: minio
       MINIO_PORT: 9000
-      OLLAMA_URL: http://ollama:11434
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       QDRANT_URL: http://qdrant:6333
     ports:
       - "127.0.0.1:3001:3001"
@@ -174,6 +174,9 @@ services:
     environment:
       API_HOST: api
       API_PORT: "3001"
+    volumes:
+      - web_uploads:/app/public/uploads
+      - web_brand:/app/public/brand
     networks:
       - commerce_network
     depends_on:
@@ -264,6 +267,8 @@ volumes:
   grafana_data:
   loki_data:
   uptime_kuma_data:
+  web_uploads:
+  web_brand:
 
 networks:
   commerce_network:

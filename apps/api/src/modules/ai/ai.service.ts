@@ -42,7 +42,7 @@ export class AiService {
     const url = `${process.env.OLLAMA_URL || 'http://localhost:11434'}/api/chat`;
     const model = process.env.OLLAMA_MODEL || 'qwen2.5:7b';
 
-    const res = await axios.post(url, { model, messages, stream: false }, { timeout: 60000 });
+    const res = await axios.post(url, { model, messages, stream: false }, { timeout: 120000 });
     return {
       content: res.data.message?.content || '',
       tokensUsed: res.data.eval_count || 0,

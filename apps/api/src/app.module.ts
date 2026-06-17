@@ -83,6 +83,8 @@ import { InboxModule } from './modules/inbox/inbox.module';
 import { SalesModule } from './modules/sales/sales.module';
 // EPIC 12: Marketing Orchestrator
 import { MarketingOrchestratorModule } from './modules/marketing-orchestrator/marketing-orchestrator.module';
+// Storefront — Customer-facing shop
+import { StorefrontModule } from './modules/storefront/storefront.module';
 
 @Module({
   imports: [
@@ -177,6 +179,8 @@ import { MarketingOrchestratorModule } from './modules/marketing-orchestrator/ma
     SalesModule,
     // EPIC 12: Marketing Orchestrator
     MarketingOrchestratorModule,
+    // Storefront
+    StorefrontModule,
     // WebSocket
     GatewayModule,
   ],

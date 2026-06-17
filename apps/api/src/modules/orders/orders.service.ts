@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
 import { OrderItem } from '../../database/entities/order-item.entity';
 import { Product } from '../../database/entities/product.entity';
+import { Customer } from '../../database/entities/customer.entity';
 import { CustomersService } from '../customers/customers.service';
 
 interface CreateOrderDto {
@@ -32,6 +33,8 @@ export class OrdersService {
     private readonly itemRepo: Repository<OrderItem>,
     @InjectRepository(Product)
     private readonly productRepo: Repository<Product>,
+    @InjectRepository(Customer)
+    private readonly customerRepo: Repository<Customer>,
     private readonly customersService: CustomersService,
   ) {}
 
@@ -87,13 +90,26 @@ export class OrdersService {
     if (status) where.status = status;
     if (customerId) where.customerId = customerId;
 
-    const [items, total] = await this.orderRepo.findAndCount({
+    const [orders, total] = await this.orderRepo.findAndCount({
       where,
       relations: ['items'],
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
     });
+
+    // Attach customer name + phone
+    const customerIds = [...new Set(orders.map(o => o.customerId).filter(Boolean))];
+    const customers = customerIds.length
+      ? await this.customerRepo.findByIds(customerIds)
+      : [];
+    const customerMap = new Map(customers.map(c => [c.id, c]));
+
+    const items = orders.map(o => {
+      const c = customerMap.get(o.customerId);
+      return { ...o, customerName: c?.name || null, customerPhone: c?.phone || null };
+    });
+
     return { items, total, page, limit };
   }
 

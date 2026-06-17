@@ -2,7 +2,10 @@ import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
+import { OrderItem } from '../../database/entities/order-item.entity';
 import { Notification, NotificationChannel, NotificationStatus } from '../../database/entities/notification.entity';
+import { InventoryService } from '../inventory/inventory.service';
+import { InventoryTxType } from '../../database/entities/inventory.entity';
 
 const STATUS_FLOW: Partial<Record<OrderStatus, OrderStatus>> = {
   [OrderStatus.PENDING]:   OrderStatus.CONFIRMED,
@@ -18,14 +21,61 @@ const STATUS_MESSAGES: Record<OrderStatus, string> = {
   [OrderStatus.CANCELLED]: 'Đơn hàng đã bị huỷ.',
 };
 
+// Statuses that mean stock has already been deducted
+const STOCK_DEDUCTED_STATUSES: OrderStatus[] = [
+  OrderStatus.CONFIRMED,
+  OrderStatus.SHIPPING,
+  OrderStatus.DELIVERED,
+];
+
 @Injectable()
 export class FulfillmentService {
   private readonly logger = new Logger(FulfillmentService.name);
 
   constructor(
     @InjectRepository(Order)        private readonly orderRepo: Repository<Order>,
+    @InjectRepository(OrderItem)    private readonly itemRepo: Repository<OrderItem>,
     @InjectRepository(Notification) private readonly notifRepo: Repository<Notification>,
+    private readonly inventoryService: InventoryService,
   ) {}
+
+  // ─── Deduct stock for all items in an order ──────────────────────────────
+
+  private async deductStock(orderId: string, orderCode: string): Promise<void> {
+    const items = await this.itemRepo.find({ where: { orderId } });
+    for (const item of items) {
+      if (!item.productId) continue;
+      try {
+        await this.inventoryService.adjust(
+          item.productId,
+          item.quantity,
+          InventoryTxType.EXPORT,
+          `Xuất kho đơn hàng ${orderCode}`,
+        );
+      } catch (e) {
+        this.logger.warn(`Deduct stock failed for product ${item.productId}: ${e.message}`);
+      }
+    }
+  }
+
+  // ─── Restore stock when order is cancelled ────────────────────────────────
+
+  private async restoreStock(orderId: string, orderCode: string): Promise<void> {
+    const items = await this.itemRepo.find({ where: { orderId } });
+    for (const item of items) {
+      if (!item.productId) continue;
+      try {
+        await this.inventoryService.adjust(
+          item.productId,
+          item.quantity,
+          InventoryTxType.RETURN,
+          `Hoàn kho huỷ đơn ${orderCode}`,
+        );
+      } catch (e) {
+        this.logger.warn(`Restore stock failed for product ${item.productId}: ${e.message}`);
+      }
+    }
+  }
 
   // ─── F03: Status Tracking — advance to next stage ───────────────────────
 
@@ -41,8 +91,13 @@ export class FulfillmentService {
     }
 
     await this.orderRepo.update(orderId, { status: next });
-    await this.sendStatusNotification(order.customerId, order.orderCode, next);
 
+    // Deduct stock when order is confirmed (first commit to fulfillment)
+    if (next === OrderStatus.CONFIRMED) {
+      await this.deductStock(orderId, order.orderCode);
+    }
+
+    await this.sendStatusNotification(order.customerId, order.orderCode, next);
     return this.orderRepo.findOneBy({ id: orderId });
   }
 
@@ -54,8 +109,18 @@ export class FulfillmentService {
     if (trackingNumber) patch.trackingNumber = trackingNumber;
 
     await this.orderRepo.update(orderId, patch);
-    await this.sendStatusNotification(order.customerId, order.orderCode, status);
 
+    // Deduct stock when transitioning into CONFIRMED from a pre-deduct state
+    if (status === OrderStatus.CONFIRMED && !STOCK_DEDUCTED_STATUSES.includes(order.status)) {
+      await this.deductStock(orderId, order.orderCode);
+    }
+
+    // Restore stock when cancelled if stock was already deducted
+    if (status === OrderStatus.CANCELLED && STOCK_DEDUCTED_STATUSES.includes(order.status)) {
+      await this.restoreStock(orderId, order.orderCode);
+    }
+
+    await this.sendStatusNotification(order.customerId, order.orderCode, status);
     return this.orderRepo.findOneBy({ id: orderId });
   }
 

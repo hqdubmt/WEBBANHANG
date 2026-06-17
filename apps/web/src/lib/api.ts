@@ -275,6 +275,44 @@ export const aiBoardApi = {
   cso: () => api.get<any>('/ai-board/cso'),
 };
 
+// Inbox (Omnichannel)
+export const inboxApi = {
+  list: (params?: Record<string, string>) => {
+    const q = params ? '?' + new URLSearchParams(params).toString() : '';
+    return api.get<{ conversations: any[]; total: number }>(`/inbox${q}`);
+  },
+  stats: () => api.get<any>('/inbox/stats'),
+  get: (id: string) => api.get<any>(`/inbox/${id}`),
+  assign: (id: string, agentId: string) => api.patch<any>(`/inbox/${id}/assign`, { agentId }),
+  resolve: (id: string) => api.patch<any>(`/inbox/${id}/resolve`, {}),
+  replyWeb: (id: string, text: string) =>
+    api.post<any>(`/inbox/webchat/reply/${id}`, { text }),
+  replyFacebook: (id: string, text: string) =>
+    api.post<any>(`/inbox/facebook/reply/${id}`, { text }),
+  replyTelegram: (id: string, text: string) =>
+    api.post<any>(`/inbox/telegram/reply/${id}`, { text }),
+};
+
+// Reports
+export const reportsApi = {
+  revenue: (days?: number) => api.get<any>(`/orders/revenue${days ? '?days=' + days : ''}`),
+  orderStats: () => api.get<any>('/orders/stats/summary'),
+  fulfillment: () => api.get<any>('/orders/fulfillment/status'),
+  customerStats: () => api.get<any>('/customers/retention/stats'),
+  paymentStats: () => api.get<any>('/payments/stats'),
+  analyticsRevenue: () => api.get<any>('/analytics/revenue'),
+};
+
+// Workflows
+export const workflowsApi = {
+  list: () => api.get<any[]>('/workflows'),
+  create: (data: any) => api.post<any>('/workflows', data),
+  update: (id: string, data: any) => api.put<any>(`/workflows/${id}`, data),
+  delete: (id: string) => api.delete<any>(`/workflows/${id}`),
+  run: (id: string) => api.post<any>(`/workflows/${id}/run`),
+  logs: (id: string) => api.get<any[]>(`/workflows/${id}/logs`),
+};
+
 // Self-Improvement Loop
 export const selfImprovementApi = {
   dashboard: () => api.get<any>('/self-improvement/dashboard'),
@@ -299,6 +337,27 @@ export const selfImprovementApi = {
   winningStrategies: () => api.get<any[]>('/self-improvement/lessons/winning-strategies'),
   failedStrategies: () => api.get<any[]>('/self-improvement/lessons/failed-strategies'),
   provenPatterns: () => api.get<any[]>('/self-improvement/lessons/proven-patterns'),
+};
+
+// Storefront (Customer-facing)
+export const storefrontApi = {
+  products: (params?: Record<string, any>) => {
+    const q = params ? '?' + new URLSearchParams(params).toString() : '';
+    return api.get<{ items: any[]; total: number; page: number; limit: number; totalPages: number }>(`/storefront/products${q}`);
+  },
+  product: (id: string) => api.get<{ product: any; related: any[] }>(`/storefront/products/${id}`),
+  categories: () => api.get<any[]>('/storefront/categories'),
+  checkout: (data: {
+    name: string; phone: string; email?: string;
+    address: string; city: string; note?: string;
+    paymentMethod: 'cod' | 'bank_transfer';
+    items: Array<{ productId: string; quantity: number }>;
+  }) => api.post<{ success: boolean; orderCode: string; orderId: string; total: number; message: string }>('/storefront/checkout', data),
+  track: (phone: string, orderCode?: string) => {
+    const q = new URLSearchParams({ phone });
+    if (orderCode) q.set('orderCode', orderCode);
+    return api.get<{ found: boolean; customerName?: string; orders?: any[]; message?: string }>(`/storefront/track?${q}`);
+  },
 };
 
 // Users (RBAC)

@@ -3,18 +3,20 @@ import { useEffect, useState } from 'react';
 import brand from '@/config/brand';
 
 interface LogoProps {
-  /** 'icon' = chỉ logo/emoji · 'full' = logo + tên + tagline · 'name' = logo + tên */
   variant?: 'icon' | 'name' | 'full';
-  /** Cỡ logo icon (px) */
   size?: number;
-  /** Màu chữ tên (Tailwind class) */
   nameClass?: string;
-  /** Màu chữ tagline (Tailwind class) */
   taglineClass?: string;
 }
 
-// cache trong bộ nhớ session để tránh fetch lại mỗi render
-let _cachedUrl: string | null | undefined = undefined;
+interface BrandConfig {
+  name: string;
+  tagline: string;
+  emoji: string;
+}
+
+let _cachedLogo: string | null | undefined = undefined;
+let _cachedConfig: BrandConfig | undefined = undefined;
 
 export default function Logo({
   variant = 'full',
@@ -23,27 +25,39 @@ export default function Logo({
   taglineClass = 'text-gray-400',
 }: LogoProps) {
   const [logoUrl, setLogoUrl] = useState<string | null>(
-    _cachedUrl !== undefined ? _cachedUrl : (brand.logoImage ?? null)
+    _cachedLogo !== undefined ? _cachedLogo : (brand.logoImage ?? null)
+  );
+  const [config, setConfig] = useState<BrandConfig>(
+    _cachedConfig ?? { name: brand.name, tagline: brand.tagline, emoji: brand.emoji }
   );
 
   useEffect(() => {
-    if (_cachedUrl !== undefined) return; // đã có cache
-    fetch('/api/brand/upload')
-      .then((r) => r.json())
-      .then((d) => {
-        _cachedUrl = d.url ?? null;
-        setLogoUrl(_cachedUrl as string | null);
-      })
-      .catch(() => {
-        _cachedUrl = null;
-      });
+    if (_cachedLogo === undefined) {
+      fetch('/api/brand/upload')
+        .then((r) => r.json())
+        .then((d) => {
+          _cachedLogo = d.url ?? null;
+          setLogoUrl(_cachedLogo as string | null);
+        })
+        .catch(() => { _cachedLogo = null; });
+    }
+
+    if (_cachedConfig === undefined) {
+      fetch('/api/brand/config')
+        .then((r) => r.json())
+        .then((d: BrandConfig) => {
+          _cachedConfig = d;
+          setConfig(d);
+        })
+        .catch(() => {});
+    }
   }, []);
 
   const icon = logoUrl ? (
     // eslint-disable-next-line @next/next/no-img-element
     <img
       src={logoUrl}
-      alt={brand.name}
+      alt={config.name}
       width={size}
       height={size}
       className="rounded-lg object-contain flex-shrink-0"
@@ -52,7 +66,7 @@ export default function Logo({
     />
   ) : (
     <span style={{ fontSize: size * 0.7 }} className="flex-shrink-0 leading-none select-none">
-      {brand.emoji}
+      {config.emoji}
     </span>
   );
 
@@ -63,14 +77,20 @@ export default function Logo({
       {icon}
       <div className="min-w-0">
         <div className={`font-bold leading-tight truncate ${nameClass}`} style={{ fontSize: size * 0.4 }}>
-          {brand.name}
+          {config.name}
         </div>
         {variant === 'full' && (
           <div className={`text-xs leading-tight truncate ${taglineClass}`}>
-            {brand.tagline}
+            {config.tagline}
           </div>
         )}
       </div>
     </div>
   );
+}
+
+// Expose cache bust helper (gọi sau khi save để refresh logo mà không reload page)
+export function bustBrandCache() {
+  _cachedLogo = undefined;
+  _cachedConfig = undefined;
 }

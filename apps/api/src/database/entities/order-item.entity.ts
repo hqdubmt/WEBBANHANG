@@ -19,10 +19,10 @@ export class OrderItem {
   @Column()
   orderId: string;
 
-  @Column()
+  @Column({ nullable: true })
   productId: string;
 
-  @ManyToOne(() => Product, { nullable: true })
+  @ManyToOne(() => Product, { nullable: true, createForeignKeyConstraints: false })
   @JoinColumn({ name: 'productId' })
   product: Product;
 

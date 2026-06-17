@@ -35,6 +35,12 @@ export class CustomersController {
     return this.service.create(dto);
   }
 
+  @Get('stats')
+  @ApiOperation({ summary: 'Thống kê tổng quan khách hàng' })
+  stats() {
+    return this.retention.getRetentionStats();
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Chi tiết khách hàng' })
   findOne(@Param('id') id: string) {

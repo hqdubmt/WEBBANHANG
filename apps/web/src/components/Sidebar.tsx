@@ -19,7 +19,9 @@ const NAV = [
   { href: '/brands', label: 'Thương hiệu', icon: '🏷' },
   { href: '/inventory', label: 'Tồn kho', icon: '📋' },
   { href: '/payments', label: 'Thanh toán', icon: '💳' },
+  { href: '/inbox', label: 'Inbox / Chat', icon: '💬' },
   { href: '/campaigns', label: 'Chiến dịch', icon: '📣' },
+  { href: '/reports', label: 'Báo cáo', icon: '📊' },
   // V4 — Portals
   { href: '/suppliers', label: 'Nhà cung cấp', icon: '🏭' },
   { href: '/dropship', label: 'Dropship', icon: '🚚' },

@@ -29,9 +29,14 @@ export class OrderAutomationService {
       throw new BadRequestException(`Không thể huỷ đơn ở trạng thái ${order.status}`);
     }
 
-    // Restore stock for each item
-    for (const item of order.items ?? []) {
-      await this.productRepo.increment({ id: item.productId }, 'stock', item.quantity);
+    // Only restore stock if order was already confirmed (stock was previously deducted)
+    const stockWasDeducted = [OrderStatus.CONFIRMED, OrderStatus.SHIPPING].includes(order.status);
+    if (stockWasDeducted) {
+      for (const item of order.items ?? []) {
+        if (item.productId) {
+          await this.productRepo.increment({ id: item.productId }, 'stock', item.quantity);
+        }
+      }
     }
 
     // Cancel any pending payments
