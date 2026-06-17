@@ -5,6 +5,36 @@ function getToken(): string | null {
   return localStorage.getItem('token');
 }
 
+let _refreshing: Promise<string | null> | null = null;
+
+async function tryRefresh(): Promise<string | null> {
+  if (_refreshing) return _refreshing;
+  _refreshing = (async () => {
+    try {
+      const refreshToken = localStorage.getItem('refreshToken');
+      if (!refreshToken) return null;
+      const res = await fetch(`${BASE}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+      });
+      if (!res.ok) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('refreshToken');
+        window.location.href = '/login';
+        return null;
+      }
+      const data = await res.json();
+      localStorage.setItem('token', data.accessToken);
+      if (data.refreshToken) localStorage.setItem('refreshToken', data.refreshToken);
+      return data.accessToken as string;
+    } finally {
+      _refreshing = null;
+    }
+  })();
+  return _refreshing;
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
   const res = await fetch(`${BASE}${path}`, {
@@ -15,6 +45,22 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       ...options.headers,
     },
   });
+  if (res.status === 401 && !path.includes('/auth/')) {
+    const newToken = await tryRefresh();
+    if (newToken) {
+      const retry = await fetch(`${BASE}${path}`, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${newToken}`,
+          ...options.headers,
+        },
+      });
+      const retryData = await retry.json().catch(() => ({}));
+      if (!retry.ok) throw new Error(retryData.message || `HTTP ${retry.status}`);
+      return retryData as T;
+    }
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
   return data as T;

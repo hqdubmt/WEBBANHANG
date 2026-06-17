@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import { AiService } from '../../ai/ai.service';
 import { ProductsService } from '../../products/products.service';
 import { MarketplaceService, MarketplaceProduct } from '../../marketplace/marketplace.service';
+import { TikiService } from '../../marketplace/tiki.service';
 import { AgentLog, AgentName, AgentRunStatus } from '../../../database/entities/agent-log.entity';
 import { ProductSource, ProductStatus } from '../../../database/entities/product.entity';
 
@@ -21,6 +22,7 @@ export class TrendAgentService {
     private readonly aiService: AiService,
     private readonly productsService: ProductsService,
     private readonly marketplace: MarketplaceService,
+    private readonly tiki: TikiService,
     @InjectRepository(AgentLog)
     private readonly logRepo: Repository<AgentLog>,
   ) {}
@@ -93,8 +95,15 @@ export class TrendAgentService {
       });
     }
 
-    // Không có API key: log cảnh báo và dùng mock để flow không bị vỡ
-    this.logger.warn('Không có marketplace API key nào được cấu hình, dùng dữ liệu mock');
+    // Không có API key: lấy từ Tiki (không cần key)
+    this.logger.log('Không có marketplace API key, dùng Tiki.vn public data');
+    const tikiProducts = await this.tiki.getTrending(80);
+    if (tikiProducts.length > 0) {
+      this.logger.log(`Tiki: lấy được ${tikiProducts.length} sản phẩm thật`);
+      return tikiProducts;
+    }
+
+    this.logger.warn('Tiki không trả dữ liệu, dùng mock tạm thời');
     return this.getMockProducts();
   }
 
@@ -164,6 +173,7 @@ Trả về JSON array: [{"idx":1,"score":85,"reason":"..."}]`;
       shopee: ProductSource.SHOPEE,
       lazada: ProductSource.LAZADA,
       tiktok: ProductSource.TIKTOK,
+      tiki: ProductSource.MANUAL,
     };
 
     const entities = products.map((p) => ({
