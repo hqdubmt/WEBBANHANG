@@ -6,6 +6,9 @@ import { AiService } from '../../ai/ai.service';
 import { ProductsService } from '../../products/products.service';
 import { MarketplaceService, MarketplaceProduct } from '../../marketplace/marketplace.service';
 import { TikiService } from '../../marketplace/tiki.service';
+import { ShopeeScraperService } from '../../marketplace/shopee-scraper.service';
+import { LazadaScraperService } from '../../marketplace/lazada-scraper.service';
+import { TikTokScraperService } from '../../marketplace/tiktok-scraper.service';
 import { AgentLog, AgentName, AgentRunStatus } from '../../../database/entities/agent-log.entity';
 import { ProductSource, ProductStatus } from '../../../database/entities/product.entity';
 
@@ -23,6 +26,9 @@ export class TrendAgentService {
     private readonly productsService: ProductsService,
     private readonly marketplace: MarketplaceService,
     private readonly tiki: TikiService,
+    private readonly shopeeScraper: ShopeeScraperService,
+    private readonly lazadaScraper: LazadaScraperService,
+    private readonly tiktokScraper: TikTokScraperService,
     @InjectRepository(AgentLog)
     private readonly logRepo: Repository<AgentLog>,
   ) {}
@@ -46,18 +52,25 @@ export class TrendAgentService {
       // Bước 2: AI chấm điểm trend (batch để tiết kiệm token)
       const scored = await this.scoreWithAI(rawProducts);
 
-      // Bước 3: Lọc top 100 sản phẩm có điểm >= 50
-      const top = scored.filter((p) => p.trendScore >= 50).slice(0, 100);
+      // Bước 3: Lọc top 100 sản phẩm (threshold 35 để giữ đủ sp khi AI fallback)
+      const threshold = this.marketplace.configuredPlatforms.length > 0 ? 50 : 35;
+      const top = scored.filter((p) => p.trendScore >= threshold).slice(0, 100);
 
       // Bước 4: Lưu vào database
       await this.saveProducts(top);
+
+      const platformCounts = rawProducts.reduce((acc, p) => {
+        acc[p.platform] = (acc[p.platform] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
 
       await this.logRepo.update(log.id, {
         status: AgentRunStatus.SUCCESS,
         output: {
           total: rawProducts.length,
           saved: top.length,
-          platforms: this.marketplace.configuredPlatforms,
+          platformBreakdown: platformCounts,
+          configuredPlatforms: this.marketplace.configuredPlatforms,
           topProducts: top.slice(0, 5).map((p) => ({ name: p.name, score: p.trendScore, platform: p.platform })),
         } as any,
         durationMs: Date.now() - startMs,
@@ -80,30 +93,49 @@ export class TrendAgentService {
     const configured = this.marketplace.configuredPlatforms;
 
     if (configured.length > 0) {
-      // Có API key: lấy dữ liệu thật
+      // Có API key chính thức: dùng API trước
       const [trending, fromKeywords] = await Promise.all([
         this.marketplace.getTrendingProducts(100),
         this.marketplace.scanHotKeywords(5),
       ]);
-      // Gộp + dedup dựa trên sourceId
       const all = [...trending, ...fromKeywords];
       const seen = new Set<string>();
-      return all.filter((p) => {
+      const deduped = all.filter((p) => {
         if (seen.has(p.sourceId)) return false;
         seen.add(p.sourceId);
         return true;
       });
+      if (deduped.length >= 30) return deduped;
+      // Ít quá → bổ sung từ scrapers
     }
 
-    // Không có API key: lấy từ Tiki (không cần key)
-    this.logger.log('Không có marketplace API key, dùng Tiki.vn public data');
-    const tikiProducts = await this.tiki.getTrending(80);
-    if (tikiProducts.length > 0) {
-      this.logger.log(`Tiki: lấy được ${tikiProducts.length} sản phẩm thật`);
-      return tikiProducts;
-    }
+    // Không có API key hoặc API trả ít: chạy tất cả scrapers song song
+    this.logger.log('Chạy scrapers đa nền tảng (Tiki + Shopee + Lazada + TikTok)...');
+    const [tikiData, shopeeData, lazadaData, tiktokData] = await Promise.all([
+      this.tiki.getTrending(80).catch(() => [] as MarketplaceProduct[]),
+      this.shopeeScraper.getTrending(40).catch(() => [] as MarketplaceProduct[]),
+      this.lazadaScraper.getTrending(40).catch(() => [] as MarketplaceProduct[]),
+      this.tiktokScraper.getTrending(30).catch(() => [] as MarketplaceProduct[]),
+    ]);
 
-    this.logger.warn('Tiki không trả dữ liệu, dùng mock tạm thời');
+    this.logger.log(
+      `Kết quả scrapers — Tiki: ${tikiData.length} | Shopee: ${shopeeData.length} | Lazada: ${lazadaData.length} | TikTok: ${tiktokData.length}`
+    );
+
+    const all = [...tikiData, ...shopeeData, ...lazadaData, ...tiktokData];
+
+    // Dedup theo sourceId
+    const seen = new Set<string>();
+    const deduped = all.filter((p) => {
+      if (seen.has(p.sourceId)) return false;
+      seen.add(p.sourceId);
+      return true;
+    });
+
+    if (deduped.length > 0) return deduped;
+
+    // Tất cả đều fail → mock
+    this.logger.warn('Tất cả scrapers không trả dữ liệu, dùng mock tạm thời');
     return this.getMockProducts();
   }
 
@@ -162,10 +194,11 @@ Trả về JSON array: [{"idx":1,"score":85,"reason":"..."}]`;
   }
 
   private calculateFallbackScore(p: MarketplaceProduct): number {
-    const salesScore = Math.min(p.sales / 1000, 40);    // tối đa 40 điểm
-    const commissionScore = Math.min(p.commission * 2, 30); // tối đa 30 điểm
-    const ratingScore = (p.rating / 5) * 30;             // tối đa 30 điểm
-    return Math.round(salesScore + commissionScore + ratingScore);
+    const salesScore = p.sales > 0 ? Math.min(p.sales / 500, 35) : 15; // 15 base nếu không có sales data
+    const commissionScore = Math.min(p.commission * 2, 25);
+    const ratingScore = p.rating > 0 ? (p.rating / 5) * 25 : 15; // 15 base nếu không có rating
+    const nameScore = p.name.length > 20 ? 5 : 0; // sản phẩm có tên đầy đủ
+    return Math.round(salesScore + commissionScore + ratingScore + nameScore);
   }
 
   private async saveProducts(products: ScoredProduct[]): Promise<void> {
@@ -173,7 +206,7 @@ Trả về JSON array: [{"idx":1,"score":85,"reason":"..."}]`;
       shopee: ProductSource.SHOPEE,
       lazada: ProductSource.LAZADA,
       tiktok: ProductSource.TIKTOK,
-      tiki: ProductSource.MANUAL,
+      tiki: ProductSource.SHOPEE, // Tiki mapped to SHOPEE since no TIKI enum
     };
 
     const entities = products.map((p) => ({
