@@ -112,7 +112,7 @@ services:
     container_name: commerce_ollama
     restart: always
     ports:
-      - "127.0.0.1:11434:11434"
+      - "127.0.0.1:${OLLAMA_DOCKER_PORT:-11435}:11434"
     volumes:
       - ollama_data:/root/.ollama
     networks:
@@ -125,7 +125,7 @@ services:
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
     ports:
-      - "127.0.0.1:3000:8080"
+      - "127.0.0.1:${OPEN_WEBUI_PORT:-3050}:8080"
     volumes:
       - open_webui_data:/app/backend/data
     networks:
@@ -141,6 +141,7 @@ services:
     restart: always
     env_file: .env
     environment:
+      APP_PORT: "3001"
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       REDIS_HOST: redis
@@ -149,7 +150,7 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       MINIO_ENDPOINT: minio
       MINIO_PORT: 9000
-      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      OLLAMA_URL: http://ollama:11434
       QDRANT_URL: http://qdrant:6333
     ports:
       - "127.0.0.1:3001:3001"
@@ -191,6 +192,7 @@ services:
       - "8080:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./apps/web/public:/usr/share/nginx/html:ro
     networks:
       - commerce_network
     depends_on:

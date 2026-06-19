@@ -1,12 +1,15 @@
-import { Controller, Get, Post, Put, Patch, Delete, Param, Body, Query } from '@nestjs/common';
+import { Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { OrdersService } from './orders.service';
 import { OrderAutomationService } from './order-automation.service';
 import { FulfillmentService } from './fulfillment.service';
+import { OrderNotifyService } from './order-notify.service';
 import { OrderStatus } from '../../database/entities/order.entity';
 import { Notification, NotificationStatus } from '../../database/entities/notification.entity';
+import { Roles } from '../auth/auth.guard';
+import { UserRole } from '../../database/entities/user.entity';
 
 @ApiTags('Orders')
 @Controller('orders')
@@ -15,6 +18,7 @@ export class OrdersController {
     private readonly service: OrdersService,
     private readonly automation: OrderAutomationService,
     private readonly fulfillment: FulfillmentService,
+    private readonly notify: OrderNotifyService,
     @InjectRepository(Notification) private readonly notifRepo: Repository<Notification>,
   ) {}
 
@@ -73,6 +77,14 @@ export class OrdersController {
   @ApiOperation({ summary: 'Huỷ đơn hàng + hoàn kho' })
   cancelOrder(@Param('id') id: string, @Body('reason') reason?: string) {
     return this.automation.cancelOrder(id, reason);
+  }
+
+  @Delete(':id/hard')
+  @Roles(UserRole.ADMIN)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: '[Admin] Xoá vĩnh viễn đơn hàng khỏi hệ thống' })
+  hardDeleteOrder(@Param('id') id: string) {
+    return this.service.hardDelete(id);
   }
 
   @Post('bulk/status')
@@ -143,5 +155,11 @@ export class OrdersController {
       .where('recipientType = :t AND status = :s', { t: 'admin', s: NotificationStatus.SENT })
       .execute();
     return { ok: true };
+  }
+
+  @Post('notify/check-now')
+  @ApiOperation({ summary: 'Gửi thông báo Telegram cho tất cả đơn pending 24h' })
+  async checkOrdersNow() {
+    return this.notify.checkNow();
   }
 }

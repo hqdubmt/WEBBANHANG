@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ShopeeService, ShopeeProduct } from './shopee.service';
 import { LazadaService, LazadaProduct } from './lazada.service';
 import { TiktokService, TiktokProduct } from './tiktok.service';
+import { AccessTradeService } from './accesstrade.service';
 
 export interface MarketplaceProduct {
   sourceId: string;
@@ -19,9 +20,10 @@ export interface MarketplaceProduct {
 }
 
 export interface AffiliateResult {
-  platform: 'shopee' | 'lazada' | 'tiktok';
+  platform: 'shopee' | 'lazada' | 'tiktok' | 'tiki';
   affiliateLink: string;
   commission: number;
+  method?: string;
 }
 
 const HOT_KEYWORDS = [
@@ -38,6 +40,7 @@ export class MarketplaceService {
     private readonly shopee: ShopeeService,
     private readonly lazada: LazadaService,
     private readonly tiktok: TiktokService,
+    private readonly accesstrade: AccessTradeService,
   ) {}
 
   get configuredPlatforms(): string[] {
@@ -117,23 +120,37 @@ export class MarketplaceService {
 
   // Tạo affiliate link từ URL gốc (khi đã biết product URL)
   async generateAffiliateFromUrl(originalUrl: string): Promise<AffiliateResult | null> {
-    let result: string | null = null;
-    let platform: 'shopee' | 'lazada' | 'tiktok';
-
     if (originalUrl.includes('shopee.vn') && this.shopee.isConfigured) {
-      result = await this.shopee.generateAffiliateLink(originalUrl);
-      platform = 'shopee';
-    } else if (originalUrl.includes('lazada.vn') && this.lazada.isConfigured) {
-      result = await this.lazada.generateAffiliateLink(originalUrl);
-      platform = 'lazada';
-    } else if ((originalUrl.includes('tiktok.com') || originalUrl.includes('tiktokshop')) && this.tiktok.isConfigured) {
-      const productId = this.extractTiktokProductId(originalUrl);
-      if (productId) result = await this.tiktok.generateAffiliateLink(productId);
-      platform = 'tiktok';
+      const result = await this.shopee.generateAffiliateLink(originalUrl);
+      if (result) return { platform: 'shopee', affiliateLink: result, commission: 0 };
     }
 
-    if (!result) return null;
-    return { platform, affiliateLink: result, commission: 0 };
+    if (originalUrl.includes('lazada.vn') && this.lazada.isConfigured) {
+      const result = await this.lazada.generateAffiliateLink(originalUrl);
+      if (result) return { platform: 'lazada', affiliateLink: result, commission: 0 };
+    }
+
+    if ((originalUrl.includes('tiktok.com') || originalUrl.includes('tiktokshop')) && this.tiktok.isConfigured) {
+      const productId = this.extractTiktokProductId(originalUrl);
+      if (productId) {
+        const result = await this.tiktok.generateAffiliateLink(productId);
+        if (result) return { platform: 'tiktok', affiliateLink: result, commission: 0 };
+      }
+    }
+
+    if (originalUrl.includes('tiki.vn') && this.accesstrade.isConfigured) {
+      const tikiCampaign = await this.accesstrade.findTikiCampaign();
+      const campaignId = tikiCampaign?.id;
+      const { trackingUrl, method } = await this.accesstrade.generateTrackingLink(originalUrl, campaignId);
+      return {
+        platform: 'tiki',
+        affiliateLink: trackingUrl,
+        commission: this.accesstrade.tikiCommission,
+        method,
+      };
+    }
+
+    return null;
   }
 
   private normalizeShopee(p: ShopeeProduct): MarketplaceProduct {

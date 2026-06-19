@@ -52,9 +52,9 @@ export class TrendAgentService {
       // Bước 2: AI chấm điểm trend (batch để tiết kiệm token)
       const scored = await this.scoreWithAI(rawProducts);
 
-      // Bước 3: Lọc top 100 sản phẩm (threshold 35 để giữ đủ sp khi AI fallback)
-      const threshold = this.marketplace.configuredPlatforms.length > 0 ? 50 : 35;
-      const top = scored.filter((p) => p.trendScore >= threshold).slice(0, 100);
+      // Bước 3: Lọc top 300 sản phẩm (threshold 30 để giữ đủ sp)
+      const threshold = this.marketplace.configuredPlatforms.length > 0 ? 50 : 30;
+      const top = scored.filter((p) => p.trendScore >= threshold).slice(0, 300);
 
       // Bước 4: Lưu vào database
       await this.saveProducts(top);
@@ -112,7 +112,7 @@ export class TrendAgentService {
     // Không có API key hoặc API trả ít: chạy tất cả scrapers song song
     this.logger.log('Chạy scrapers đa nền tảng (Tiki + Shopee + Lazada + TikTok)...');
     const [tikiData, shopeeData, lazadaData, tiktokData] = await Promise.all([
-      this.tiki.getTrending(80).catch(() => [] as MarketplaceProduct[]),
+      this.tiki.getTrending(200).catch(() => [] as MarketplaceProduct[]),
       this.shopeeScraper.getTrending(40).catch(() => [] as MarketplaceProduct[]),
       this.lazadaScraper.getTrending(40).catch(() => [] as MarketplaceProduct[]),
       this.tiktokScraper.getTrending(30).catch(() => [] as MarketplaceProduct[]),
@@ -206,7 +206,7 @@ Trả về JSON array: [{"idx":1,"score":85,"reason":"..."}]`;
       shopee: ProductSource.SHOPEE,
       lazada: ProductSource.LAZADA,
       tiktok: ProductSource.TIKTOK,
-      tiki: ProductSource.SHOPEE, // Tiki mapped to SHOPEE since no TIKI enum
+      tiki: ProductSource.TIKI,
     };
 
     const entities = products.map((p) => ({

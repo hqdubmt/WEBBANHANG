@@ -35,15 +35,15 @@ export class VideoOptimizerService {
         .createQueryBuilder('v')
         .where('v.status = :s', { s: 'published' })
         .orderBy('RANDOM()')
-        .take(10)
+        .take(3)
         .getMany();
 
-      const optimized: any[] = [];
-
-      for (const video of videos) {
-        const suggestion = await this.generateOptimization(video);
-        optimized.push({ videoId: video.id, suggestion });
-      }
+      const optimized = await Promise.all(
+        videos.map(async (video) => ({
+          videoId: video.id,
+          suggestion: await this.generateOptimization(video),
+        })),
+      );
 
       await this.logRepo.update(log.id, {
         status: AgentRunStatus.SUCCESS,
@@ -58,7 +58,8 @@ export class VideoOptimizerService {
         errorMessage: err.message,
         durationMs: Date.now() - startMs,
       });
-      throw err;
+      this.logger.warn(`VideoOptimizer lỗi: ${err.message}`);
+      return { optimized: 0, error: err.message };
     }
   }
 

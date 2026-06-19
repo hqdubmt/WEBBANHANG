@@ -10,6 +10,7 @@ import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
 import { OrderAutomationService } from './order-automation.service';
 import { FulfillmentService } from './fulfillment.service';
+import { OrderNotifyService } from './order-notify.service';
 import { CustomersModule } from '../customers/customers.module';
 import { InventoryModule } from '../inventory/inventory.module';
 
@@ -20,7 +21,7 @@ import { InventoryModule } from '../inventory/inventory.module';
     InventoryModule,
   ],
   controllers: [OrdersController],
-  providers: [OrdersService, OrderAutomationService, FulfillmentService],
-  exports: [OrdersService, OrderAutomationService, FulfillmentService],
+  providers: [OrdersService, OrderAutomationService, FulfillmentService, OrderNotifyService],
+  exports: [OrdersService, OrderAutomationService, FulfillmentService, OrderNotifyService],
 })
 export class OrdersModule {}
