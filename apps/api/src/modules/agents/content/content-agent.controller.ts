@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Param } from '@nestjs/common';
+import { Controller, Post, Get, Param, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { ContentAgentService } from './content-agent.service';
 
@@ -15,8 +15,14 @@ export class ContentAgentController {
 
   @Get('pending')
   @ApiOperation({ summary: 'Danh sách bài chờ đăng' })
-  pending() {
-    return this.service.getPendingContents();
+  pending(@Query('platform') platform?: string) {
+    return this.service.getPendingContents(30, platform as any);
+  }
+
+  @Post('publish-telegram')
+  @ApiOperation({ summary: 'Publish tất cả draft Telegram content ngay' })
+  async publishTelegram() {
+    return this.service.publishAllDraftTelegram();
   }
 
   @Post(':id/publish')

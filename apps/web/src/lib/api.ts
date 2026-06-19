@@ -108,6 +108,7 @@ export const ordersApi = {
   create: (data: any) => api.post<any>('/orders', data),
   updateStatus: (id: string, status: string) => api.put<any>(`/orders/${id}/status`, { status }),
   revenue: () => api.get<any>('/orders/revenue'),
+  hardDelete: (id: string) => api.delete<void>(`/orders/${id}/hard`),
 };
 
 // Customers
@@ -117,6 +118,7 @@ export const customersApi = {
     return api.get<{ items: any[]; total: number; page: number; limit: number }>(`/customers${q}`);
   },
   get: (id: string) => api.get<any>(`/customers/${id}`),
+  delete: (id: string) => api.delete<void>(`/customers/${id}`),
 };
 
 // Leads

@@ -32,7 +32,7 @@ export default function PaymentsPage() {
   const [stats, setStats] = useState<any>(null);
   const [methods, setMethods] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<'list' | 'cod' | 'methods'>('list');
+  const [tab, setTab] = useState<'list' | 'cod' | 'methods' | 'bank'>('list');
 
   // COD form
   const [orders, setOrders] = useState<any[]>([]);
@@ -93,8 +93,11 @@ export default function PaymentsPage() {
     setCodSaving(false);
   };
 
+  const pendingBank = items.filter(i => i.method === 'bank_transfer' && i.status === 'pending');
+
   const TABS = [
     { key: 'list', label: '📋 Lịch sử' },
+    { key: 'bank', label: `🏦 Chờ CK${pendingBank.length ? ` (${pendingBank.length})` : ''}` },
     { key: 'cod', label: '💵 Thu COD' },
     { key: 'methods', label: '🏧 Phương thức' },
   ];
@@ -168,6 +171,40 @@ export default function PaymentsPage() {
             )},
           ]}
         />
+      )}
+
+      {/* Tab: Bank Transfer pending */}
+      {tab === 'bank' && (
+        <div>
+          {pendingBank.length === 0 ? (
+            <div className="text-center py-12 text-gray-400">
+              <div className="text-4xl mb-3">✅</div>
+              <p>Không có giao dịch chuyển khoản nào đang chờ</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {pendingBank.map((item) => (
+                <div key={item.id} className="bg-white border border-yellow-200 rounded-xl p-4 flex items-center justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-mono text-xs text-indigo-600 font-bold">{item.paymentCode}</span>
+                      <span className="bg-yellow-100 text-yellow-700 text-xs px-2 py-0.5 rounded-full">Chờ CK</span>
+                    </div>
+                    <div className="text-lg font-bold text-gray-900">{fmtVND(item.amount)}</div>
+                    <div className="text-xs text-gray-400 mt-0.5">{item.note || ''}</div>
+                    <div className="text-xs text-gray-400">{fmtDate(item.createdAt)}</div>
+                  </div>
+                  <button
+                    onClick={() => { setConfirmItem(item); setConfirmModal(true); }}
+                    className="px-4 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 font-medium whitespace-nowrap"
+                  >
+                    ✅ Đã nhận tiền
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
 
       {/* Tab: COD */}

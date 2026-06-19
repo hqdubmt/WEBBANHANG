@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, ILike } from 'typeorm';
+import * as crypto from 'crypto';
 import { Product, ProductStatus } from '../../database/entities/product.entity';
 import { Order, OrderSource, OrderStatus } from '../../database/entities/order.entity';
 import { OrderItem } from '../../database/entities/order-item.entity';
@@ -8,6 +9,10 @@ import { Customer } from '../../database/entities/customer.entity';
 import { Lead, LeadStatus, LeadPlatform } from '../../database/entities/lead.entity';
 import { Category } from '../../database/entities/category.entity';
 import { Notification, NotificationChannel, NotificationStatus } from '../../database/entities/notification.entity';
+import { Payment, PaymentMethod, PaymentStatus } from '../../database/entities/payment.entity';
+import { PaymentGatewayService } from '../payments/payment-gateway.service';
+import { AffiliateConversion } from '../../database/entities/affiliate-conversion.entity';
+import { AffiliatePartner, AffiliatePartnerStatus } from '../../database/entities/affiliate-partner.entity';
 
 export interface CheckoutDto {
   name: string;
@@ -18,6 +23,7 @@ export interface CheckoutDto {
   note?: string;
   paymentMethod: 'cod' | 'bank_transfer';
   items: Array<{ productId: string; quantity: number }>;
+  refCode?: string; // mã affiliate partner
 }
 
 @Injectable()
@@ -30,7 +36,14 @@ export class StorefrontService {
     @InjectRepository(Lead) private readonly leadRepo: Repository<Lead>,
     @InjectRepository(Category) private readonly categoryRepo: Repository<Category>,
     @InjectRepository(Notification) private readonly notifRepo: Repository<Notification>,
+    @InjectRepository(Payment) private readonly paymentRepo: Repository<Payment>,
+    @InjectRepository(AffiliateConversion) private readonly conversionRepo: Repository<AffiliateConversion>,
+    @InjectRepository(AffiliatePartner) private readonly affiliatePartnerRepo: Repository<AffiliatePartner>,
+    private readonly gatewayService: PaymentGatewayService,
   ) {}
+
+  // Nguồn scraper chỉ dùng cho affiliate, không hiện trong storefront
+  private readonly AFFILIATE_SOURCES = ['tiki', 'shopee', 'lazada', 'tiktok'];
 
   async listProducts(query: {
     page?: number;
@@ -44,13 +57,42 @@ export class StorefrontService {
     if (query.search) where.name = ILike(`%${query.search}%`);
     if (query.category) where.category = query.category;
 
-    const [items, total] = await this.productRepo.findAndCount({
-      where,
-      order: { trendScore: 'DESC', createdAt: 'DESC' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
-    return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
+    const [items, total] = await this.productRepo
+      .createQueryBuilder('p')
+      .where('p.status = :status', { status: ProductStatus.ACTIVE })
+      .andWhere('p.source NOT IN (:...sources)', { sources: this.AFFILIATE_SOURCES })
+      .andWhere(query.search ? 'p.name ILIKE :search' : '1=1', { search: `%${query.search}%` })
+      .andWhere(query.category ? 'p.category = :cat' : '1=1', { cat: query.category })
+      .orderBy('p.trendScore', 'DESC').addOrderBy('p.createdAt', 'DESC')
+      .skip((page - 1) * limit).take(limit)
+      .getManyAndCount();
+
+    return { items, total, page, limit };
+  }
+
+  async listAffiliateProducts(query: {
+    page?: number;
+    limit?: number;
+    category?: string;
+  }) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(200, Number(query.limit) || 48);
+
+    const qb = this.productRepo
+      .createQueryBuilder('p')
+      .where('p.status = :status', { status: ProductStatus.ACTIVE })
+      .andWhere('p.source IN (:...sources)', { sources: this.AFFILIATE_SOURCES })
+      .andWhere('p."affiliateLink" IS NOT NULL')
+      .select(['p.id','p.name','p.price','p.image','p.category','p.commission','p.affiliateLink','p.source']);
+
+    if (query.category) qb.andWhere('p.category = :cat', { cat: query.category });
+
+    const [items, total] = await qb
+      .orderBy('RANDOM()')
+      .skip((page - 1) * limit).take(limit)
+      .getManyAndCount();
+
+    return { items, total, page, limit };
   }
 
   async getProduct(id: string) {
@@ -177,12 +219,53 @@ export class StorefrontService {
       }),
     );
 
+    // Tạo payment record cho bank_transfer
+    let bankTransferInfo: ReturnType<PaymentGatewayService['getBankTransferInfo']> | null = null;
+    if (dto.paymentMethod === 'bank_transfer') {
+      const payment = this.paymentRepo.create({
+        paymentCode: `PAY${Date.now()}${crypto.randomBytes(2).toString('hex').toUpperCase()}`,
+        orderId: savedOrder.id,
+        amount: subtotal,
+        method: PaymentMethod.BANK_TRANSFER,
+        status: PaymentStatus.PENDING,
+        note: `Chờ khách chuyển khoản — Đơn ${savedOrder.orderCode}`,
+      });
+      await this.paymentRepo.save(payment);
+      bankTransferInfo = this.gatewayService.getBankTransferInfo(subtotal, savedOrder.orderCode);
+    }
+
+    // Ghi nhận affiliate conversion nếu có refCode
+    if (dto.refCode) {
+      const partner = await this.affiliatePartnerRepo.findOne({
+        where: { referralCode: dto.refCode, status: AffiliatePartnerStatus.ACTIVE },
+      });
+      if (partner) {
+        const commissionAmount = (subtotal * Number(partner.commissionRate)) / 100;
+        await this.conversionRepo.save(this.conversionRepo.create({
+          partnerId: partner.id,
+          referralCode: dto.refCode,
+          orderId: savedOrder.id,
+          orderValue: subtotal,
+          commissionRate: Number(partner.commissionRate),
+          commissionAmount,
+          status: 'pending' as any,
+        }));
+        await this.affiliatePartnerRepo.increment({ id: partner.id }, 'totalConversions', 1);
+        await this.affiliatePartnerRepo.increment({ id: partner.id }, 'totalEarned', commissionAmount);
+        await this.affiliatePartnerRepo.increment({ id: partner.id }, 'pendingPayout', commissionAmount);
+      }
+    }
+
     return {
       success: true,
       orderCode: savedOrder.orderCode,
       orderId: savedOrder.id,
       total: subtotal,
-      message: `Đặt hàng thành công! Mã đơn: ${savedOrder.orderCode}. Chúng tôi sẽ liên hệ xác nhận trong 30 phút.`,
+      paymentMethod: dto.paymentMethod,
+      bankTransfer: bankTransferInfo,
+      message: dto.paymentMethod === 'bank_transfer'
+        ? `Đặt hàng thành công! Vui lòng chuyển khoản ${subtotal.toLocaleString('vi-VN')}₫ để xác nhận đơn ${savedOrder.orderCode}.`
+        : `Đặt hàng thành công! Mã đơn: ${savedOrder.orderCode}. Chúng tôi sẽ liên hệ xác nhận trong 30 phút.`,
     };
   }
 

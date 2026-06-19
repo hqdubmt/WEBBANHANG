@@ -158,4 +158,38 @@ export class PaymentGatewayService {
   createCodReference(orderId: string): string {
     return `COD-${orderId.slice(-8).toUpperCase()}`;
   }
+
+  // ─── Chuyển khoản ngân hàng (VietQR) ─────────────────────────────────────
+
+  getBankTransferInfo(amount: number, orderCode: string) {
+    const bin = process.env.BANK_BIN || '';
+    const accountNumber = process.env.BANK_ACCOUNT_NUMBER || '';
+    const accountName = process.env.BANK_ACCOUNT_NAME || '';
+    const shortName = process.env.BANK_SHORT_NAME || 'Ngân hàng';
+    const confirmHours = Number(process.env.BANK_CONFIRM_HOURS) || 2;
+
+    const content = `Thanh toan ${orderCode}`;
+    const configured = !!(bin && accountNumber && accountName);
+
+    let qrUrl = '';
+    if (configured) {
+      const encodedContent = encodeURIComponent(content);
+      const encodedName = encodeURIComponent(accountName);
+      qrUrl = `https://img.vietqr.io/image/${bin}-${accountNumber}-compact2.png?amount=${amount}&addInfo=${encodedContent}&accountName=${encodedName}`;
+    }
+
+    return {
+      configured,
+      bankName: shortName,
+      accountNumber,
+      accountName,
+      amount,
+      content,
+      qrUrl,
+      confirmHours,
+      note: configured
+        ? `Sau khi chuyển khoản, đơn hàng sẽ được xác nhận trong ${confirmHours} giờ`
+        : 'Nhân viên sẽ liên hệ cung cấp thông tin tài khoản',
+    };
+  }
 }

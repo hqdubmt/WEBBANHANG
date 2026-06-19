@@ -2,11 +2,15 @@ import { Controller, Get, Post, Param, Body, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { Public } from '../auth/auth.guard';
 import { StorefrontService, CheckoutDto } from './storefront.service';
+import { PaymentGatewayService } from '../payments/payment-gateway.service';
 
 @ApiTags('Storefront')
 @Controller('storefront')
 export class StorefrontController {
-  constructor(private readonly service: StorefrontService) {}
+  constructor(
+    private readonly service: StorefrontService,
+    private readonly gateway: PaymentGatewayService,
+  ) {}
 
   @Public()
   @Get('products')
@@ -28,10 +32,28 @@ export class StorefrontController {
   }
 
   @Public()
+  @Get('affiliate/products')
+  @ApiOperation({ summary: 'Sản phẩm affiliate (Tiki/Shopee) cho trang deal — chỉ dùng redirect AT link' })
+  listAffiliateProducts(
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('category') category?: string,
+  ) {
+    return this.service.listAffiliateProducts({ page, limit, category });
+  }
+
+  @Public()
   @Get('categories')
   @ApiOperation({ summary: 'Danh sách danh mục (public)' })
   listCategories() {
     return this.service.listCategories();
+  }
+
+  @Public()
+  @Get('bank-info')
+  @ApiOperation({ summary: 'Thông tin tài khoản ngân hàng (public)' })
+  bankInfo(@Query('amount') amount?: string, @Query('orderCode') orderCode?: string) {
+    return this.gateway.getBankTransferInfo(Number(amount) || 0, orderCode || '');
   }
 
   @Public()

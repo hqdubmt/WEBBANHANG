@@ -4,6 +4,7 @@ import { Repository, Like } from 'typeorm';
 import { AffiliatePartner, AffiliatePartnerStatus, AffiliatePartnerTier } from '../../database/entities/affiliate-partner.entity';
 import { AffiliateClick } from '../../database/entities/affiliate-click.entity';
 import { AffiliateConversion, ConversionStatus } from '../../database/entities/affiliate-conversion.entity';
+import { Product } from '../../database/entities/product.entity';
 
 @Injectable()
 export class AffiliatePortalService {
@@ -14,6 +15,8 @@ export class AffiliatePortalService {
     private readonly clickRepo: Repository<AffiliateClick>,
     @InjectRepository(AffiliateConversion)
     private readonly conversionRepo: Repository<AffiliateConversion>,
+    @InjectRepository(Product)
+    private readonly productRepo: Repository<Product>,
   ) {}
 
   // --- Partners ---
@@ -74,7 +77,7 @@ export class AffiliatePortalService {
     };
   }
 
-  // --- Clicks ---
+  // --- Clicks & Redirect ---
 
   async trackClick(data: Partial<AffiliateClick>) {
     const partner = await this.partnerRepo.findOne({ where: { referralCode: data.referralCode } });
@@ -82,6 +85,40 @@ export class AffiliatePortalService {
       await this.partnerRepo.increment({ id: partner.id }, 'totalClicks', 1);
     }
     return this.clickRepo.save(this.clickRepo.create(data));
+  }
+
+  async handleClick(
+    refCode: string,
+    productId: string,
+    meta: { ipAddress: string; userAgent: string; referer: string },
+  ): Promise<string> {
+    const partner = await this.partnerRepo.findOne({ where: { referralCode: refCode, status: AffiliatePartnerStatus.ACTIVE } });
+
+    let destination = 'https://tiki.vn'; // fallback
+    let productName = '';
+
+    if (productId) {
+      const product = await this.productRepo.findOne({ where: { id: productId } });
+      if (product?.affiliateLink) {
+        destination = product.affiliateLink;
+        productName = product.name;
+      }
+    }
+
+    if (partner) {
+      await this.partnerRepo.increment({ id: partner.id }, 'totalClicks', 1);
+      await this.clickRepo.save(this.clickRepo.create({
+        partnerId: partner.id,
+        referralCode: refCode,
+        productId,
+        productName,
+        ipAddress: meta.ipAddress,
+        userAgent: meta.userAgent,
+        referer: meta.referer,
+      }));
+    }
+
+    return destination;
   }
 
   // --- Conversions ---

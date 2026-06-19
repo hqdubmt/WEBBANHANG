@@ -137,4 +137,11 @@ export class OrdersService {
     const orders = parseInt(result.orders || '0');
     return { total, orders, avgOrder: orders > 0 ? total / orders : 0 };
   }
+
+  async hardDelete(id: string): Promise<void> {
+    const order = await this.orderRepo.findOne({ where: { id } });
+    if (!order) throw new NotFoundException('Đơn hàng không tồn tại');
+    await this.itemRepo.delete({ orderId: id });
+    await this.orderRepo.delete(id);
+  }
 }

@@ -88,11 +88,12 @@ module.exports = {
     {
       name: 'commerce-web',
       cwd: '/home/hqdu/quangdu/webbanhang/apps/web',
-      script: 'node_modules/.bin/next',
-      args: `start -p ${e.WEB_PORT || 3005}`,
+      script: 'node',
+      args: `.next/standalone/quangdu/webbanhang/apps/web/server.js`,
       env: {
         NODE_ENV: 'production',
         PORT: e.WEB_PORT || 3005,
+        HOSTNAME: '0.0.0.0',
         API_HOST: e.API_HOST || 'localhost',
         API_PORT: e.API_PORT || '3004',
       },

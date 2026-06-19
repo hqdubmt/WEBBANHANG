@@ -26,6 +26,7 @@ const NAV = [
   { href: '/suppliers', label: 'Nhà cung cấp', icon: '🏭' },
   { href: '/dropship', label: 'Dropship', icon: '🚚' },
   { href: '/affiliates', label: 'Affiliate', icon: '🤝' },
+  { href: '/accesstrade', label: 'AccessTrade', icon: '🔗' },
   { href: '/marketplace', label: 'Marketplace', icon: '🛍' },
   // V5 — Enterprise & Growth
   { href: '/enterprise', label: 'Enterprise', icon: '🏢' },

@@ -70,4 +70,10 @@ export class CustomersService {
       await this.upgradeVip(id);
     }
   }
+
+  async remove(id: string): Promise<void> {
+    const c = await this.repo.findOne({ where: { id } });
+    if (!c) throw new NotFoundException(`Customer ${id} not found`);
+    await this.repo.delete(id);
+  }
 }

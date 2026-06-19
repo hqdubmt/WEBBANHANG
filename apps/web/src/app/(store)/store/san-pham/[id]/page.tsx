@@ -120,7 +120,7 @@ export default function ProductDetailPage() {
           )}
 
           {/* Buttons */}
-          <div className="flex gap-3 mb-6">
+          <div className="flex gap-3 mb-4">
             <button onClick={handleAddCart} disabled={!inStock} className={`flex-1 py-3 rounded-xl font-semibold text-sm transition-all ${added ? 'bg-green-500 text-white' : !inStock ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'border-2 border-indigo-600 text-indigo-600 hover:bg-indigo-50'}`}>
               {added ? '✓ Đã thêm vào giỏ!' : '+ Thêm vào giỏ hàng'}
             </button>
@@ -128,6 +128,17 @@ export default function ProductDetailPage() {
               {buyNow ? 'Đang chuyển...' : 'Mua ngay →'}
             </button>
           </div>
+          {/* Affiliate link - redirect trực tiếp Tiki/Shopee */}
+          {product.affiliateLink && (
+            <a
+              href={product.affiliateLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-center gap-2 w-full py-3 rounded-xl font-semibold text-sm bg-orange-500 text-white hover:bg-orange-600 active:scale-95 transition-all mb-6"
+            >
+              🛒 Mua trên {product.source === 'tiki' ? 'Tiki' : product.source === 'shopee' ? 'Shopee' : 'Sàn TMĐT'} (giá tốt nhất)
+            </a>
+          )}
 
           {/* Perks */}
           <div className="grid grid-cols-2 gap-3 text-sm text-gray-600">

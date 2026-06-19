@@ -23,8 +23,19 @@ export class AiService {
 
     try {
       return await this.callOllama(allMessages);
-    } catch (e) {
-      this.logger.warn('Ollama failed, fallback to OpenRouter');
+    } catch (ollamaErr) {
+      this.logger.warn(`Ollama failed: ${ollamaErr.message}`);
+      const apiKey = process.env.OPENROUTER_API_KEY;
+      if (!apiKey) {
+        // Không có OpenRouter key → trả về response giản lược thay vì crash
+        this.logger.warn('OpenRouter chưa cấu hình — trả về response mặc định');
+        const lastUserMsg = [...allMessages].reverse().find(m => m.role === 'user')?.content || '';
+        return {
+          content: `[AI đang bận, phân tích tự động] ${lastUserMsg.slice(0, 100)}`,
+          tokensUsed: 0,
+          provider: 'ollama',
+        };
+      }
       return await this.callOpenRouter(allMessages);
     }
   }
@@ -40,9 +51,9 @@ export class AiService {
 
   private async callOllama(messages: AiMessage[]): Promise<AiResponse> {
     const url = `${process.env.OLLAMA_URL || 'http://localhost:11434'}/api/chat`;
-    const model = process.env.OLLAMA_MODEL || 'qwen2.5:7b';
+    const model = process.env.OLLAMA_MODEL || 'qwen2.5:1.5b';
 
-    const res = await axios.post(url, { model, messages, stream: false }, { timeout: 120000 });
+    const res = await axios.post(url, { model, messages, stream: false, options: { num_predict: 512 } }, { timeout: 30000 });
     return {
       content: res.data.message?.content || '',
       tokensUsed: res.data.eval_count || 0,

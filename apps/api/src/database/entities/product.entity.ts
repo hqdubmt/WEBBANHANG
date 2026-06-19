@@ -8,6 +8,7 @@ export enum ProductSource {
   SHOPEE = 'shopee',
   LAZADA = 'lazada',
   TIKTOK = 'tiktok',
+  TIKI = 'tiki',
   MANUAL = 'manual',
 }
 

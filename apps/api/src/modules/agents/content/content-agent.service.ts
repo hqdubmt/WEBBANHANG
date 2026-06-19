@@ -27,11 +27,20 @@ export class ContentAgentService {
     private readonly logRepo: Repository<AgentLog>,
   ) {}
 
-  // Tạo nội dung lúc 9h sáng mỗi ngày
-  @Cron('0 9 * * *')
+  // Tạo + tự publish nội dung Telegram mỗi 3 giờ
+  @Cron('0 7,10,13,16,19 * * *')
   async runDailyContentCreation() {
     this.logger.log('Content Agent: bắt đầu tạo nội dung...');
-    await this.createBulkContent();
+    const contents = await this.createBulkContent(5);
+    // Auto-publish Telegram ngay
+    for (const c of contents) {
+      if (c.platform === ContentPlatform.TELEGRAM) {
+        try {
+          await this.publishContent(c.id);
+        } catch {/* ignore */}
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    }
   }
 
   async createBulkContent(count = 10): Promise<Content[]> {
@@ -44,7 +53,7 @@ export class ContentAgentService {
       const created: Content[] = [];
 
       for (const product of products) {
-        const platforms = [ContentPlatform.FACEBOOK, ContentPlatform.TELEGRAM, ContentPlatform.WEBSITE];
+        const platforms = [ContentPlatform.FACEBOOK, ContentPlatform.TELEGRAM, ContentPlatform.WEBSITE, ContentPlatform.TIKTOK];
         for (const platform of platforms) {
           const generated = await this.generateContent(product, platform);
           const content = this.contentRepo.create({
@@ -100,12 +109,21 @@ Mô tả: ${product.description || 'Sản phẩm chất lượng cao'}
 
 Trả về JSON.`;
 
+    const link = product.affiliateLink || '#';
     try {
-      return await this.aiService.parseJson<GeneratedContent>(prompt, systemPrompt);
+      const result = await this.aiService.parseJson<GeneratedContent>(prompt, systemPrompt);
+      // Replace any hallucinated API/wrong URLs with actual affiliateLink
+      if (link !== '#') {
+        result.content = result.content.replace(
+          /https:\/\/tiki\.vn\/(?:api\/v2\/products\/\d+|product\/p\d+)[^\s]*/g,
+          link,
+        );
+      }
+      return result;
     } catch {
       return {
         title: `${product.name} - Giá tốt hôm nay!`,
-        content: `${product.name} - Sản phẩm hot giá ${product.price?.toLocaleString('vi-VN')}đ. Link: ${product.affiliateLink || '#'}`,
+        content: `${product.name} - Sản phẩm hot, giá ${product.price?.toLocaleString('vi-VN')}đ. Mua ngay: ${link}`,
         hashtags: ['muasắm', 'giảmgiá', product.category?.replace(/\s/g, '') || 'deal'].filter(Boolean),
       };
     }
@@ -165,11 +183,22 @@ Trả về JSON.`;
     });
   }
 
-  async getPendingContents(limit = 30): Promise<Content[]> {
-    return this.contentRepo.find({
-      where: { status: ContentStatus.DRAFT },
-      order: { createdAt: 'DESC' },
-      take: limit,
-    });
+  async getPendingContents(limit = 30, platform?: ContentPlatform): Promise<Content[]> {
+    const where: any = { status: ContentStatus.DRAFT };
+    if (platform) where.platform = platform;
+    return this.contentRepo.find({ where, order: { createdAt: 'DESC' }, take: limit });
+  }
+
+  async publishAllDraftTelegram(): Promise<{ published: number; failed: number }> {
+    const drafts = await this.getPendingContents(50, ContentPlatform.TELEGRAM);
+    let published = 0, failed = 0;
+    for (const c of drafts) {
+      try {
+        await this.publishContent(c.id);
+        published++;
+      } catch { failed++; }
+      await new Promise(r => setTimeout(r, 1500));
+    }
+    return { published, failed };
   }
 }

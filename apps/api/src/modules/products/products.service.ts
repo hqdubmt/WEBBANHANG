@@ -58,14 +58,19 @@ export class ProductsService {
   }
 
   async getHotProducts(limit = 100): Promise<Product[]> {
-    return this.repo.find({
-      where: { status: ProductStatus.ACTIVE },
-      order: { trendScore: 'DESC' },
-      take: limit,
-    });
+    // Trộn random để tránh lặp cùng một sản phẩm mỗi lần
+    return this.repo
+      .createQueryBuilder('p')
+      .where('p.status = :status', { status: ProductStatus.ACTIVE })
+      .andWhere('p."affiliateLink" IS NOT NULL')
+      .orderBy('RANDOM()')
+      .take(limit)
+      .getMany();
   }
 
   async bulkUpsert(products: Partial<Product>[]): Promise<void> {
-    await this.repo.upsert(products, ['sourceId']);
+    const valid = products.filter(p => p.sourceId && p.sourceId.trim() !== '');
+    if (valid.length === 0) return;
+    await this.repo.upsert(valid, ['sourceId']);
   }
 }

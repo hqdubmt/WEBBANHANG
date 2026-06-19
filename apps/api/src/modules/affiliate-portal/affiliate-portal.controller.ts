@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Put, Param, Query, Body } from '@nestjs/common';
+import { Controller, Get, Post, Put, Param, Query, Body, Redirect, Req, Res } from '@nestjs/common';
+import { Response, Request } from 'express';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { AffiliatePortalService } from './affiliate-portal.service';
 import { AffiliatePartnerStatus } from '../../database/entities/affiliate-partner.entity';
@@ -59,6 +60,27 @@ export class AffiliatePortalController {
   @ApiOperation({ summary: 'Tạm dừng affiliate partner' })
   suspendPartner(@Param('id') id: string) {
     return this.svc.suspendPartner(id);
+  }
+
+  // ─── Public click redirect ────────────────────────────────────────────────
+  // URL: /api/affiliate-portal/go/:refCode?p={productId}
+  // Ghi nhận click → redirect đến affiliate link thật
+
+  @Get('go/:refCode')
+  @Public()
+  @ApiOperation({ summary: 'Click redirect — ghi nhận rồi redirect đến AT link (public)' })
+  async goRedirect(
+    @Param('refCode') refCode: string,
+    @Query('p') productId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const destination = await this.svc.handleClick(refCode, productId, {
+      ipAddress: (req.headers['x-forwarded-for'] as string)?.split(',')[0] || req.socket.remoteAddress || '',
+      userAgent: req.headers['user-agent'] || '',
+      referer: req.headers['referer'] || '',
+    });
+    return res.redirect(302, destination);
   }
 
   // Clicks

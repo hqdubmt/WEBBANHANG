@@ -1,10 +1,12 @@
-import { Controller, Get, Post, Put, Patch, Param, Body, Query } from '@nestjs/common';
+import { Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { CustomersService } from './customers.service';
 import { CustomerHealthService } from './customer-health.service';
 import { RetentionService } from './retention.service';
 import { LoyaltyService } from './loyalty.service';
 import { CustomerTier } from '../../database/entities/customer.entity';
+import { Roles } from '../auth/auth.guard';
+import { UserRole } from '../../database/entities/user.entity';
 
 @ApiTags('Customers')
 @Controller('customers')
@@ -51,6 +53,14 @@ export class CustomersController {
   @ApiOperation({ summary: 'Cập nhật khách hàng' })
   update(@Param('id') id: string, @Body() dto: any) {
     return this.service.update(id, dto);
+  }
+
+  @Delete(':id')
+  @Roles(UserRole.ADMIN)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: '[Admin] Xoá khách hàng khỏi hệ thống' })
+  remove(@Param('id') id: string) {
+    return this.service.remove(id);
   }
 
   @Post(':id/upgrade-vip')

@@ -72,6 +72,15 @@ export default function CustomersPage() {
     } catch { /* ignore */ }
   };
 
+  const deleteCustomer = async (id: string, name: string) => {
+    if (!confirm(`Xoá vĩnh viễn khách hàng "${name}"? Hành động này không thể hoàn tác.`)) return;
+    try {
+      await customersApi.delete(id);
+      setDetailModal(false);
+      load();
+    } catch (e: any) { alert(e.message || 'Không có quyền xoá'); }
+  };
+
   return (
     <div>
       <PageHeader
@@ -146,7 +155,15 @@ export default function CustomersPage() {
             <span className="text-xs text-gray-400">{fmtDate(r.createdAt)}</span>
           )},
           { key: 'actions', label: '', render: (r) => (
-            <button onClick={() => openDetail(r.id)} className="text-xs text-indigo-600 hover:underline">Chi tiết</button>
+            <div className="flex gap-3 items-center">
+              <button onClick={() => openDetail(r.id)} className="text-xs text-indigo-600 hover:underline">Chi tiết</button>
+              <button
+                onClick={() => deleteCustomer(r.id, r.name || 'khách hàng')}
+                className="text-xs text-red-500 hover:text-red-700 hover:underline"
+              >
+                Xoá
+              </button>
+            </div>
           )},
         ]}
       />
@@ -214,6 +231,14 @@ export default function CustomersPage() {
                 <p className="text-sm text-gray-700 bg-gray-50 rounded p-2">{detail.notes}</p>
               </div>
             )}
+            <div className="pt-2 flex justify-end border-t border-gray-100">
+              <button
+                onClick={() => deleteCustomer(detail.id, detail.name)}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm rounded-lg"
+              >
+                Xoá khách hàng
+              </button>
+            </div>
           </div>
         </Modal>
       )}

@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 
 const fmtVND = (n: any) => new Intl.NumberFormat('vi-VN').format(Number(n) || 0) + '₫';
@@ -11,6 +11,7 @@ function getCart(): any[] {
 const CITIES = ['Hồ Chí Minh', 'Hà Nội', 'Đà Nẵng', 'Cần Thơ', 'Hải Phòng', 'Biên Hòa', 'Nha Trang', 'Huế', 'Buôn Ma Thuột', 'Tỉnh/Thành khác'];
 
 type F = { name: string; phone: string; email: string; address: string; city: string; note: string; paymentMethod: 'cod' | 'bank_transfer' };
+type BankInfo = { configured: boolean; bankName: string; accountNumber: string; accountName: string; amount: number; content: string; qrUrl: string; confirmHours: number; note: string };
 
 export default function CheckoutPage() {
   const [cart, setCart] = useState<any[]>([]);
@@ -18,7 +19,12 @@ export default function CheckoutPage() {
   const [form, setForm] = useState<F>({ name: '', phone: '', email: '', address: '', city: 'Hồ Chí Minh', note: '', paymentMethod: 'cod' });
   const [errors, setErrors] = useState<Partial<F>>({});
   const [submitting, setSubmitting] = useState(false);
-  const [result, setResult] = useState<{ success: boolean; orderCode?: string; message?: string } | null>(null);
+  const [result, setResult] = useState<{ success: boolean; orderCode?: string; message?: string; paymentMethod?: string; bankTransfer?: BankInfo } | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const copy = useCallback((text: string, key: string) => {
+    navigator.clipboard.writeText(text).then(() => { setCopied(key); setTimeout(() => setCopied(null), 2000); });
+  }, []);
 
   useEffect(() => {
     setCart(getCart());
@@ -86,7 +92,104 @@ export default function CheckoutPage() {
     return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" /></div>;
   }
 
-  // Success
+  // Success — bank transfer
+  if (result?.success && result.paymentMethod === 'bank_transfer' && result.bankTransfer) {
+    const bk = result.bankTransfer;
+    return (
+      <div className="max-w-lg mx-auto px-4 py-10">
+        <div className="text-center mb-6">
+          <div className="text-5xl mb-3">🎉</div>
+          <h2 className="text-xl font-bold text-gray-800">Đặt hàng thành công!</h2>
+          <div className="mt-2 inline-block bg-indigo-50 border border-indigo-100 rounded-lg px-4 py-1.5">
+            <span className="text-sm text-gray-500">Mã đơn: </span>
+            <span className="font-bold text-indigo-600 font-mono">{result.orderCode}</span>
+          </div>
+        </div>
+
+        <div className="bg-white border-2 border-indigo-200 rounded-2xl p-5 mb-4">
+          <h3 className="font-bold text-gray-800 text-center mb-4">🏦 Thông tin chuyển khoản</h3>
+
+          {bk.configured && bk.qrUrl && (
+            <div className="flex justify-center mb-5">
+              <div className="bg-white p-2 rounded-xl border border-gray-200 shadow-sm">
+                <img src={bk.qrUrl} alt="QR chuyển khoản" className="w-52 h-52 object-contain" />
+                <p className="text-xs text-center text-gray-400 mt-1">Quét QR bằng app ngân hàng</p>
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between bg-gray-50 rounded-xl px-4 py-3">
+              <div>
+                <div className="text-xs text-gray-400">Ngân hàng</div>
+                <div className="font-semibold text-gray-900">{bk.bankName}</div>
+              </div>
+            </div>
+
+            {bk.configured ? (
+              <>
+                <div className="flex items-center justify-between bg-gray-50 rounded-xl px-4 py-3">
+                  <div>
+                    <div className="text-xs text-gray-400">Số tài khoản</div>
+                    <div className="font-bold text-gray-900 text-lg font-mono tracking-wider">{bk.accountNumber}</div>
+                  </div>
+                  <button onClick={() => copy(bk.accountNumber, 'acc')} className="text-xs text-indigo-600 hover:text-indigo-800 font-medium ml-4 whitespace-nowrap">
+                    {copied === 'acc' ? '✓ Đã copy' : 'Copy'}
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between bg-gray-50 rounded-xl px-4 py-3">
+                  <div>
+                    <div className="text-xs text-gray-400">Tên tài khoản</div>
+                    <div className="font-semibold text-gray-900 uppercase">{bk.accountName}</div>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between bg-green-50 border border-green-200 rounded-xl px-4 py-3">
+                  <div>
+                    <div className="text-xs text-green-600">Số tiền</div>
+                    <div className="font-bold text-green-700 text-xl">{fmtVND(bk.amount)}</div>
+                  </div>
+                  <button onClick={() => copy(String(bk.amount), 'amt')} className="text-xs text-green-700 hover:text-green-900 font-medium ml-4 whitespace-nowrap">
+                    {copied === 'amt' ? '✓ Đã copy' : 'Copy'}
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between bg-yellow-50 border border-yellow-200 rounded-xl px-4 py-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs text-yellow-700 font-medium">Nội dung chuyển khoản</div>
+                    <div className="font-bold text-yellow-900 font-mono mt-0.5">{bk.content}</div>
+                  </div>
+                  <button onClick={() => copy(bk.content, 'content')} className="text-xs text-yellow-700 hover:text-yellow-900 font-medium ml-4 whitespace-nowrap">
+                    {copied === 'content' ? '✓ Đã copy' : 'Copy'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="bg-blue-50 rounded-xl px-4 py-3 text-sm text-blue-700 text-center">
+                Nhân viên sẽ liên hệ qua SĐT <strong>{form.phone}</strong> để cung cấp số tài khoản
+              </div>
+            )}
+          </div>
+
+          <div className="mt-4 bg-orange-50 border border-orange-200 rounded-xl p-3 text-xs text-orange-700 text-center">
+            ⚠️ Nhập <strong>đúng nội dung</strong> chuyển khoản để đơn được xác nhận tự động trong <strong>{bk.confirmHours} giờ</strong>
+          </div>
+        </div>
+
+        <div className="flex gap-3">
+          <a href="/store/theo-doi-don" className="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-semibold text-sm text-center hover:bg-indigo-700 transition-colors">
+            Theo dõi đơn →
+          </a>
+          <a href="/store" className="flex-1 border border-gray-200 text-gray-600 py-3 rounded-xl text-sm text-center hover:bg-gray-50 transition-colors">
+            Về trang chủ
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  // Success — COD
   if (result?.success) {
     return (
       <div className="max-w-md mx-auto px-4 py-16 text-center">
@@ -200,7 +303,7 @@ export default function CheckoutPage() {
             <div className="space-y-3">
               {[
                 { value: 'cod', icon: '💵', label: 'COD — Thanh toán khi nhận hàng', desc: 'Trả tiền mặt khi nhận hàng, an toàn và tiện lợi' },
-                { value: 'bank_transfer', icon: '🏦', label: 'Chuyển khoản ngân hàng', desc: 'Nhân viên sẽ cung cấp thông tin tài khoản qua điện thoại' },
+                { value: 'bank_transfer', icon: '🏦', label: 'Chuyển khoản ngân hàng', desc: 'Hiển thị QR và số tài khoản sau khi đặt hàng — xác nhận trong 2 giờ' },
               ].map(opt => (
                 <label key={opt.value} className={`flex items-start gap-3 p-4 border rounded-xl cursor-pointer transition-all ${form.paymentMethod === opt.value ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'}`}>
                   <input type="radio" name="payment" value={opt.value} checked={form.paymentMethod === opt.value} onChange={() => setForm(p => ({ ...p, paymentMethod: opt.value as 'cod' | 'bank_transfer' }))} className="mt-0.5 accent-indigo-600" />

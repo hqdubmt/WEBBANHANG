@@ -55,6 +55,15 @@ export default function OrdersPage() {
     load();
   };
 
+  const hardDelete = async (id: string, code: string) => {
+    if (!confirm(`Xoá vĩnh viễn đơn hàng ${code}? Hành động này không thể hoàn tác.`)) return;
+    try {
+      await ordersApi.hardDelete(id);
+      setDetail(null);
+      load();
+    } catch (e: any) { alert(e.message || 'Không có quyền xoá'); }
+  };
+
   const changeTab = (tab: string) => {
     setStatusFilter(tab);
     setPage(1);
@@ -295,6 +304,12 @@ export default function OrdersPage() {
                   Huỷ đơn
                 </button>
               )}
+              <button
+                onClick={() => hardDelete(detail.id, detail.orderCode)}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm rounded-lg font-medium"
+              >
+                🗑️ Xoá vĩnh viễn
+              </button>
             </div>
           </div>
         </Modal>

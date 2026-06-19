@@ -196,7 +196,7 @@ export class ChatService {
   ): Promise<string> {
     const axios = (await import('axios')).default;
     const url = `${process.env.OLLAMA_URL || 'http://localhost:11434'}/api/chat`;
-    const model = process.env.OLLAMA_MODEL || 'qwen2.5:7b';
+    const model = process.env.OLLAMA_MODEL || 'qwen2.5:1.5b';
 
     const allMessages: AiMessage[] = [
       { role: 'system', content: systemPrompt },
@@ -208,8 +208,8 @@ export class ChatService {
     try {
       const res = await axios.post(
         url,
-        { model, messages: allMessages, stream: true },
-        { responseType: 'stream', timeout: 90000 },
+        { model, messages: allMessages, stream: true, options: { num_predict: 512 } },
+        { responseType: 'stream', timeout: 45000 },
       );
 
       await new Promise<void>((resolve, reject) => {
