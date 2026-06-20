@@ -194,7 +194,8 @@ export class TelegramAgentService {
           if (results.length >= count) break;
           if (!p.url_key || !p.price || p.price <= 0) continue;
 
-          const productUrl = `https://tiki.vn/${p.url_key}-p${p.id}.html`;
+          // url_key đã chứa "-p{id}" ở cuối rồi, không thêm nữa
+          const productUrl = `https://tiki.vn/${p.url_key}.html`;
           results.push({
             name: p.name || '',
             price: p.price,
