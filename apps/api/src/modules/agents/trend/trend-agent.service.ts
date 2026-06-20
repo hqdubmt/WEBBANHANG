@@ -56,8 +56,7 @@ export class TrendAgentService {
       const threshold = this.marketplace.configuredPlatforms.length > 0 ? 50 : 30;
       const top = scored.filter((p) => p.trendScore >= threshold).slice(0, 300);
 
-      // Bước 4: Lưu vào database
-      await this.saveProducts(top);
+      // Bước 4: Không lưu vào store — chỉ dùng để post affiliate link
 
       const platformCounts = rawProducts.reduce((acc, p) => {
         acc[p.platform] = (acc[p.platform] || 0) + 1;
