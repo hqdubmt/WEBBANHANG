@@ -40,12 +40,25 @@ const HOOKS = [
   '🛍️ KHUYẾN MÃI LỚN', '💰 TIẾT KIỆM NGAY',
 ];
 
+const SHOPEE_KEYWORDS = [
+  'kem chống nắng', 'serum vitamin c', 'tai nghe bluetooth',
+  'son dưỡng môi', 'vitamin tổng hợp', 'áo thun nữ',
+  'giày sneaker', 'bình giữ nhiệt', 'máy massage', 'đồng hồ thông minh',
+];
+
+const SHOPEE_CAT_MAP: Record<string, string> = {
+  '100629': 'Sức khỏe & Làm đẹp', '100013': 'Điện thoại & Phụ kiện',
+  '100007': 'Thời trang nữ', '100008': 'Thời trang nam',
+  '100017': 'Nhà cửa & Đời sống',
+};
+
 @Injectable()
 export class TelegramAgentService {
   private readonly logger = new Logger(TelegramAgentService.name);
 
   private readonly AT_PID = process.env.ACCESSTRADE_PID || '';
   private readonly AT_AID = process.env.ACCESSTRADE_TIKI_AID || '';
+  private readonly AT_SHOPEE_AID = process.env.ACCESSTRADE_SHOPEE_AID || '';
 
   constructor(
     @InjectRepository(AgentLog)
@@ -93,8 +106,22 @@ export class TelegramAgentService {
         this.logger.warn('⚠️ AT deeplink chưa hoạt động → dùng link Tiki trực tiếp (chưa có hoa hồng). Vào accesstrade.vn join campaign TIKI CPS!');
       }
 
-      const products = await this.scrapeTikiProducts(count);
-      this.logger.log(`Cào ${products.length} sản phẩm → phân phối đa nền tảng (AT: ${atOk ? 'OK✅' : 'DIRECT🔗'})...`);
+      // Cào Tiki + Shopee song song
+      const half = Math.ceil(count / 2);
+      const [tikiProducts, shopeeProducts] = await Promise.all([
+        this.scrapeTikiProducts(half),
+        this.scrapeShopeeProducts(half),
+      ]);
+
+      // Xen kẽ Tiki và Shopee để đa dạng nguồn hàng
+      const products: ScrapedProduct[] = [];
+      const maxLen = Math.max(tikiProducts.length, shopeeProducts.length);
+      for (let i = 0; i < maxLen; i++) {
+        if (i < tikiProducts.length) products.push(tikiProducts[i]);
+        if (i < shopeeProducts.length) products.push(shopeeProducts[i]);
+      }
+
+      this.logger.log(`Cào ${tikiProducts.length} Tiki + ${shopeeProducts.length} Shopee → ${products.length} sản phẩm`);
 
       const results: Record<string, number> = {
         telegram: 0, discord: 0, zalo: 0, n8n: 0,
@@ -213,6 +240,75 @@ export class TelegramAgentService {
     return results.sort(() => Math.random() - 0.5).slice(0, count);
   }
 
+  // ─── Shopee Scraper ───────────────────────────────────────────────────────
+
+  private buildShopeeAffiliateLink(productUrl: string): string {
+    // Dùng AT deeplink nếu có SHOPEE_AID, không thì link trực tiếp
+    if (this.AT_PID && this.AT_SHOPEE_AID) {
+      const urlEnc = Buffer.from(productUrl).toString('base64');
+      return `https://go.isclix.com/deep_link/v5/${this.AT_PID}/${this.AT_SHOPEE_AID}?sub4=tele&url_enc=${encodeURIComponent(urlEnc)}`;
+    }
+    return productUrl;
+  }
+
+  private async scrapeShopeeProducts(count: number): Promise<ScrapedProduct[]> {
+    const results: ScrapedProduct[] = [];
+    const browserHeaders = {
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'application/json, text/plain, */*',
+      'Accept-Language': 'vi-VN,vi;q=0.9',
+      'Referer': 'https://shopee.vn/',
+    };
+
+    // Tìm theo keyword + lấy theo category song song
+    const keywords = SHOPEE_KEYWORDS.sort(() => Math.random() - 0.5).slice(0, 3);
+    const catIds = Object.keys(SHOPEE_CAT_MAP).sort(() => Math.random() - 0.5).slice(0, 2);
+
+    await Promise.allSettled([
+      ...keywords.map(async (kw) => {
+        try {
+          const res = await axios.get('https://shopee.vn/api/v4/search/search_items', {
+            params: { by: 'sales', keyword: kw, limit: 5, newest: 0, order: 'desc', page_type: 'search', version: 2 },
+            headers: browserHeaders, timeout: 8000,
+          });
+          (res.data?.items || []).forEach((item: any) => {
+            const p = item.item_basic || item;
+            if (!p?.name || !p?.itemid) return;
+            const price = Math.round(Number(p.price || p.price_min || 0) / 100000);
+            if (price <= 0) return;
+            const url = `https://shopee.vn/${p.name.replace(/\s+/g, '-')}-i.${p.shopid}.${p.itemid}`;
+            results.push({ name: p.name, price, image: p.image ? `https://down-vn.img.susercontent.com/file/${p.image}` : '', category: 'Shopee', affiliateLink: url, originalUrl: url });
+          });
+        } catch { /* bị block là bình thường */ }
+      }),
+      ...catIds.map(async (catId) => {
+        try {
+          const res = await axios.get('https://shopee.vn/api/v4/search/search_items', {
+            params: { by: 'sales', catid: catId, limit: 5, newest: 0, order: 'desc', page_type: 'shop' },
+            headers: browserHeaders, timeout: 8000,
+          });
+          (res.data?.items || []).forEach((item: any) => {
+            const p = item.item_basic || item;
+            if (!p?.name || !p?.itemid) return;
+            const price = Math.round(Number(p.price || p.price_min || 0) / 100000);
+            if (price <= 0) return;
+            const url = `https://shopee.vn/${p.name.replace(/\s+/g, '-')}-i.${p.shopid}.${p.itemid}`;
+            const cat = SHOPEE_CAT_MAP[catId] || 'Shopee';
+            results.push({ name: p.name, price, image: p.image ? `https://down-vn.img.susercontent.com/file/${p.image}` : '', category: cat, affiliateLink: url, originalUrl: url });
+          });
+        } catch { /* ignore */ }
+      }),
+    ]);
+
+    // Dedup
+    const seen = new Set<string>();
+    return results.filter(p => {
+      if (seen.has(p.originalUrl)) return false;
+      seen.add(p.originalUrl);
+      return true;
+    }).slice(0, count);
+  }
+
   // ─── Platform Publishers ──────────────────────────────────────────────────
 
   private readonly CTA = '\n\n👥 Theo dõi kênh: t.me/banhang1';
@@ -223,8 +319,9 @@ export class TelegramAgentService {
     const hook = HOOKS[index % HOOKS.length];
     const tag = p.category.replace(/\s/g, '').replace(/[&\-\/]/g, '');
 
-    const markdown = `${hook}\n${emoji} *${p.name.slice(0, 80)}*\n\n💰 *${pf}*\n\n🔗 [Đặt hàng ngay](${link})\n\n#${tag} #tiki #deal${this.CTA}`;
-    const plain = `${hook}\n${emoji} ${p.name.slice(0, 80)}\n\n💰 ${pf}\n\n🔗 ${link}\n\n#${tag} #tiki #deal${this.CTA}`;
+    const source = p.originalUrl.includes('shopee.vn') ? 'shopee' : 'tiki';
+    const markdown = `${hook}\n${emoji} *${p.name.slice(0, 80)}*\n\n💰 *${pf}*\n\n🔗 [Đặt hàng ngay](${link})\n\n#${tag} #${source} #deal${this.CTA}`;
+    const plain = `${hook}\n${emoji} ${p.name.slice(0, 80)}\n\n💰 ${pf}\n\n🔗 ${link}\n\n#${tag} #${source} #deal${this.CTA}`;
 
     return { markdown, plain };
   }
@@ -241,7 +338,8 @@ export class TelegramAgentService {
 
     if (chatIds.length === 0) return false;
 
-    const longLink = this.buildAffiliateLink(p.originalUrl, 'tele');
+    const isShopee = p.originalUrl.includes('shopee.vn');
+    const longLink = isShopee ? this.buildShopeeAffiliateLink(p.originalUrl) : this.buildAffiliateLink(p.originalUrl, 'tele');
     const link = await this.shorten(longLink);
     const { markdown } = this.buildText(link, p, index);
 
@@ -284,16 +382,18 @@ export class TelegramAgentService {
     const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
     const emoji = Object.entries(CAT_EMOJI).find(([k]) => p.category.includes(k))?.[1] ?? '🛒';
     const hook = HOOKS[index % HOOKS.length];
-    const link = this.buildAffiliateLink(p.originalUrl, 'discord');
+    const isShopeeD = p.originalUrl.includes('shopee.vn');
+    const link = isShopeeD ? this.buildShopeeAffiliateLink(p.originalUrl) : this.buildAffiliateLink(p.originalUrl, 'discord');
+    const source = isShopeeD ? 'Shopee' : 'Tiki';
 
     const payload = {
       embeds: [{
         title: `${hook} ${emoji} ${p.name.slice(0, 100)}`,
         description: `💰 **${pf}**\n\n🏷️ ${p.category}\n\n[Đặt hàng ngay →](${link})`,
         url: link,
-        color: 0xFF6B35,
+        color: isShopeeD ? 0xEE4D2D : 0xFF6B35,
         thumbnail: p.image ? { url: p.image } : undefined,
-        footer: { text: '👥 Theo dõi Telegram: t.me/banhang1 | Tiki Affiliate Deal' },
+        footer: { text: `👥 Theo dõi Telegram: t.me/banhang1 | ${source} Affiliate Deal` },
       }],
     };
 
