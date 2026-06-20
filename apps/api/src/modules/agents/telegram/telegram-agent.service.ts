@@ -3,7 +3,10 @@ import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import axios from 'axios';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const FormData = require('form-data');
 import { AgentLog, AgentName, AgentRunStatus } from '../../../database/entities/agent-log.entity';
+import { ImageGeneratorService } from './image-generator.service';
 
 interface ScrapedProduct {
   name: string;
@@ -12,6 +15,7 @@ interface ScrapedProduct {
   category: string;
   affiliateLink: string;
   originalUrl: string;
+  discount?: number;
 }
 
 const TIKI_CATEGORIES = [
@@ -63,6 +67,7 @@ export class TelegramAgentService {
   constructor(
     @InjectRepository(AgentLog)
     private readonly logRepo: Repository<AgentLog>,
+    private readonly imgGen: ImageGeneratorService,
   ) {}
 
   // Cào + đăng mỗi 2 giờ từ 8h-22h lên TẤT CẢ platform
@@ -328,7 +333,7 @@ export class TelegramAgentService {
     return { markdown, plain };
   }
 
-  // Telegram — post tới channel chính + tất cả group trong TELEGRAM_GROUP_IDS
+  // Telegram — gửi ảnh product card + caption
   private async postTelegram(p: ScrapedProduct, index: number): Promise<boolean> {
     const token = process.env.TELEGRAM_BOT_TOKEN;
     if (!token) return false;
@@ -341,18 +346,43 @@ export class TelegramAgentService {
     if (chatIds.length === 0) return false;
 
     const isShopee = p.originalUrl.includes('shopee.vn');
-    const longLink = isShopee ? this.buildShopeeAffiliateLink(p.originalUrl) : this.buildAffiliateLink(p.originalUrl, 'tele');
-    const link = await this.shorten(longLink);
-    const { markdown } = this.buildText(link, p, index);
+    const link = isShopee ? this.buildShopeeAffiliateLink(p.originalUrl) : this.buildAffiliateLink(p.originalUrl, 'tele');
+    const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
+    const hook = HOOKS[index % HOOKS.length];
+    const { plain } = this.buildText(link, p, index);
+
+    // Tạo ảnh product card
+    const imgBuffer = await this.imgGen.generateProductCard({
+      name: p.name,
+      price: pf,
+      category: p.category,
+      imageUrl: p.image,
+      hook,
+      source: isShopee ? 'shopee' : 'tiki',
+    });
 
     let anySuccess = false;
     for (const chatId of chatIds) {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
-            chat_id: chatId, text: markdown, parse_mode: 'Markdown',
-            disable_web_page_preview: false,
-          }, { timeout: 20000 });
+          if (imgBuffer) {
+            // Gửi ảnh + caption
+            const form = new FormData();
+            form.append('chat_id', chatId);
+            form.append('photo', imgBuffer, { filename: 'deal.jpg', contentType: 'image/jpeg' });
+            form.append('caption', plain.slice(0, 1024));
+            form.append('parse_mode', 'Markdown');
+            await axios.post(`https://api.telegram.org/bot${token}/sendPhoto`, form, {
+              headers: form.getHeaders(),
+              timeout: 30000,
+            });
+          } else {
+            // Fallback: gửi text nếu không tạo được ảnh
+            await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+              chat_id: chatId, text: plain, parse_mode: 'Markdown',
+              disable_web_page_preview: false,
+            }, { timeout: 20000 });
+          }
           anySuccess = true;
           break;
         } catch (e: any) {
