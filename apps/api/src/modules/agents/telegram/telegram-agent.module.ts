@@ -3,11 +3,12 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AgentLog } from '../../../database/entities/agent-log.entity';
 import { TelegramAgentService } from './telegram-agent.service';
 import { TelegramAgentController } from './telegram-agent.controller';
+import { TelegramBotService } from './telegram-bot.service';
 
 @Module({
   imports: [TypeOrmModule.forFeature([AgentLog])],
-  providers: [TelegramAgentService],
+  providers: [TelegramAgentService, TelegramBotService],
   controllers: [TelegramAgentController],
-  exports: [TelegramAgentService],
+  exports: [TelegramAgentService, TelegramBotService],
 })
 export class TelegramAgentModule {}

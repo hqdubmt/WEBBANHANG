@@ -214,14 +214,16 @@ export class TelegramAgentService {
 
   // ─── Platform Publishers ──────────────────────────────────────────────────
 
+  private readonly CTA = '\n\n👥 Theo dõi kênh: t.me/banhang1';
+
   private buildText(link: string, p: ScrapedProduct, index: number): { markdown: string; plain: string } {
     const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
     const emoji = Object.entries(CAT_EMOJI).find(([k]) => p.category.includes(k))?.[1] ?? '🛒';
     const hook = HOOKS[index % HOOKS.length];
     const tag = p.category.replace(/\s/g, '').replace(/[&\-\/]/g, '');
 
-    const markdown = `${hook}\n${emoji} *${p.name.slice(0, 80)}*\n\n💰 *${pf}*\n\n🔗 [Đặt hàng ngay](${link})\n\n#${tag} #tiki #deal`;
-    const plain = `${hook}\n${emoji} ${p.name.slice(0, 80)}\n\n💰 ${pf}\n\n🔗 ${link}\n\n#${tag} #tiki #deal`;
+    const markdown = `${hook}\n${emoji} *${p.name.slice(0, 80)}*\n\n💰 *${pf}*\n\n🔗 [Đặt hàng ngay](${link})\n\n#${tag} #tiki #deal${this.CTA}`;
+    const plain = `${hook}\n${emoji} ${p.name.slice(0, 80)}\n\n💰 ${pf}\n\n🔗 ${link}\n\n#${tag} #tiki #deal${this.CTA}`;
 
     return { markdown, plain };
   }
@@ -290,7 +292,7 @@ export class TelegramAgentService {
         url: link,
         color: 0xFF6B35,
         thumbnail: p.image ? { url: p.image } : undefined,
-        footer: { text: 'Tiki Affiliate Deal' },
+        footer: { text: '👥 Theo dõi Telegram: t.me/banhang1 | Tiki Affiliate Deal' },
       }],
     };
 
