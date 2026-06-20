@@ -12,6 +12,7 @@ import { LeadsModule } from './modules/leads/leads.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { AiModule } from './modules/ai/ai.module';
 import { MarketplaceModule } from './modules/marketplace/marketplace.module';
+import { RssModule } from './modules/rss/rss.module';
 // V1 Agents
 import { TrendAgentModule } from './modules/agents/trend/trend-agent.module';
 import { AffiliateAgentModule } from './modules/agents/affiliate/affiliate-agent.module';
@@ -113,6 +114,7 @@ import { StorefrontModule } from './modules/storefront/storefront.module';
     AnalyticsModule,
     AiModule,
     MarketplaceModule,
+    RssModule,
     // V3 Core
     CategoriesModule,
     BrandsModule,
