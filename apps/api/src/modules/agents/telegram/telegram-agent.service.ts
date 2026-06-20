@@ -402,7 +402,7 @@ export class TelegramAgentService {
     return anySuccess;
   }
 
-  // Discord — post tới tất cả webhook trong DISCORD_WEBHOOK_URL + DISCORD_WEBHOOK_URLS
+  // Discord — gửi ảnh product card + embed
   private async postDiscord(p: ScrapedProduct, index: number): Promise<boolean> {
     const webhooks = [
       process.env.DISCORD_WEBHOOK_URL,
@@ -418,19 +418,31 @@ export class TelegramAgentService {
     const link = isShopeeD ? this.buildShopeeAffiliateLink(p.originalUrl) : this.buildAffiliateLink(p.originalUrl, 'discord');
     const source = isShopeeD ? 'Shopee' : 'Tiki';
 
-    const payload = {
-      embeds: [{
-        title: `${hook} ${emoji} ${p.name.slice(0, 100)}`,
-        description: `💰 **${pf}**\n\n🏷️ ${p.category}\n\n[Đặt hàng ngay →](${link})`,
-        url: link,
-        color: isShopeeD ? 0xEE4D2D : 0xFF6B35,
-        thumbnail: p.image ? { url: p.image } : undefined,
-        footer: { text: `👥 Theo dõi Telegram: t.me/banhang1 | ${source} Affiliate Deal` },
-      }],
+    // Tạo ảnh product card
+    const imgBuffer = await this.imgGen.generateProductCard({
+      name: p.name, price: pf, category: p.category,
+      imageUrl: p.image, hook, source: isShopeeD ? 'shopee' : 'tiki',
+    });
+
+    const embed = {
+      title: `${hook} ${emoji} ${p.name.slice(0, 100)}`,
+      description: `💰 **${pf}**\n\n🏷️ ${p.category}\n\n[Đặt hàng ngay →](${link})`,
+      url: link,
+      color: isShopeeD ? 0xEE4D2D : 0xFF6B35,
+      image: imgBuffer ? { url: 'attachment://deal.jpg' } : (p.image ? { url: p.image } : undefined),
+      footer: { text: `👥 t.me/banhang1 | ${source} Affiliate Deal` },
     };
 
     const results = await Promise.allSettled(
-      webhooks.map(url => axios.post(url, payload, { timeout: 10000 }))
+      webhooks.map(async (url) => {
+        if (imgBuffer) {
+          const form = new FormData();
+          form.append('payload_json', JSON.stringify({ embeds: [embed] }));
+          form.append('files[0]', imgBuffer, { filename: 'deal.jpg', contentType: 'image/jpeg' });
+          return axios.post(url, form, { headers: form.getHeaders(), timeout: 20000 });
+        }
+        return axios.post(url, { embeds: [embed] }, { timeout: 10000 });
+      })
     );
 
     const ok = results.filter(r => r.status === 'fulfilled').length;
