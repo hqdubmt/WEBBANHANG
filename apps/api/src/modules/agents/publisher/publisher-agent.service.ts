@@ -48,14 +48,15 @@ export class PublisherAgentService {
       });
 
       for (const content of pending) {
-        const platform = content.platform || 'facebook';
-        const result = await this.publishToChannel(platform as string, content);
-        results.push(result);
+        // Đăng lên Telegram + Discord (Facebook yêu cầu Business Verification)
+        const tgResult = await this.publishTelegram(content);
+        const dcResult = await this.publishDiscord(content);
+        results.push(tgResult, dcResult);
 
-        if (result.success) {
+        if (tgResult.success || dcResult.success) {
           await this.contentRepo.update(content.id, {
             status: 'published' as any,
-            platformPostId: result.postId,
+            platformPostId: tgResult.postId || dcResult.postId,
             publishedAt: new Date(),
           });
         }
@@ -82,33 +83,26 @@ export class PublisherAgentService {
 
   async publishToChannel(platform: string, content: Content): Promise<PublishResult> {
     switch (platform) {
-      case 'facebook':
-        return this.publishFacebook(content);
       case 'telegram':
         return this.publishTelegram(content);
-      case 'tiktok':
-        return this.publishTikTok(content);
+      case 'discord':
+        return this.publishDiscord(content);
       default:
-        return { platform, success: false, error: `Platform không hỗ trợ: ${platform}` };
+        return this.publishTelegram(content);
     }
   }
 
-  private async publishFacebook(content: Content): Promise<PublishResult> {
-    const pageId = process.env.FACEBOOK_PAGE_ID;
-    const token = process.env.FACEBOOK_ACCESS_TOKEN;
-
-    if (!pageId || !token) {
-      return { platform: 'facebook', success: false, error: 'Chưa cấu hình Facebook API' };
+  private async publishDiscord(content: Content): Promise<PublishResult> {
+    const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+    if (!webhookUrl) {
+      return { platform: 'discord', success: false, error: 'Chưa cấu hình Discord webhook' };
     }
-
     try {
-      const { data } = await axios.post(
-        `https://graph.facebook.com/v19.0/${pageId}/feed`,
-        { message: content.body, access_token: token },
-      );
-      return { platform: 'facebook', success: true, postId: data.id };
+      const text = content.title ? `**${content.title}**\n\n${content.body}` : content.body;
+      await axios.post(webhookUrl, { content: text.slice(0, 2000) });
+      return { platform: 'discord', success: true };
     } catch (e) {
-      return { platform: 'facebook', success: false, error: e.response?.data?.error?.message || e.message };
+      return { platform: 'discord', success: false, error: e.response?.data?.message || e.message };
     }
   }
 
