@@ -124,22 +124,24 @@ export class TelegramAgentService {
       this.logger.log(`Cào ${tikiProducts.length} Tiki + ${shopeeProducts.length} Shopee → ${products.length} sản phẩm`);
 
       const results: Record<string, number> = {
-        telegram: 0, discord: 0, zalo: 0, n8n: 0,
+        telegram: 0, discord: 0, zalo: 0, n8n: 0, facebook: 0,
       };
 
       for (let i = 0; i < products.length; i++) {
         const p = products[i];
 
         // Chạy song song tất cả platform
-        const [tg, dc, zl] = await Promise.allSettled([
+        const [tg, dc, zl, fb] = await Promise.allSettled([
           this.postTelegram(p, i),
           this.postDiscord(p, i),
           this.postZaloOA(p),
+          this.postMakeFacebook(p, i),
         ]);
 
         if (tg.status === 'fulfilled' && tg.value) results.telegram++;
         if (dc.status === 'fulfilled' && dc.value) results.discord++;
         if (zl.status === 'fulfilled' && zl.value) results.zalo++;
+        if (fb.status === 'fulfilled' && fb.value) results.facebook++;
 
         await new Promise(r => setTimeout(r, 1300));
       }
@@ -455,6 +457,54 @@ export class TelegramAgentService {
       return true;
     } catch (e) {
       this.logger.debug(`n8n webhook lỗi: ${e.message}`);
+      return false;
+    }
+  }
+
+  // ─── Make.com → Facebook Fanpage ─────────────────────────────────────────
+
+  private async postMakeFacebook(p: ScrapedProduct, index: number): Promise<boolean> {
+    const webhookUrl = process.env.MAKE_FACEBOOK_WEBHOOK;
+    if (!webhookUrl) return false;
+
+    const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
+    const emoji = Object.entries(CAT_EMOJI).find(([k]) => p.category.includes(k))?.[1] ?? '🛒';
+    const hook = HOOKS[index % HOOKS.length];
+    const isShopee = p.originalUrl.includes('shopee.vn');
+    const link = isShopee
+      ? this.buildShopeeAffiliateLink(p.originalUrl)
+      : this.buildAffiliateLink(p.originalUrl, 'fb');
+    const tag = p.category.replace(/\s/g, '').replace(/[&\-\/]/g, '');
+    const source = isShopee ? 'Shopee' : 'Tiki';
+
+    const message = [
+      `${hook} ${emoji}`,
+      ``,
+      `${p.name.slice(0, 150)}`,
+      ``,
+      `💰 Giá: ${pf}`,
+      `🏷️ ${p.category} (${source})`,
+      ``,
+      `👉 Mua ngay: ${link}`,
+      ``,
+      `#deal #${tag} #${source.toLowerCase()} #muasam #khuyenmai`,
+      ``,
+      `📢 Theo dõi Telegram nhận deal sớm hơn: https://t.me/banhang1`,
+    ].join('\n');
+
+    try {
+      await axios.post(webhookUrl, {
+        message,
+        link,
+        image_url: p.image || '',
+        title: p.name.slice(0, 200),
+        price: pf,
+        category: p.category,
+        source,
+      }, { timeout: 10000 });
+      return true;
+    } catch (e: any) {
+      this.logger.debug(`Make.com Facebook lỗi: ${e.response?.data || e.message}`);
       return false;
     }
   }
