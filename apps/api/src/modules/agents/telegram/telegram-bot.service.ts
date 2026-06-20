@@ -83,7 +83,7 @@ Gõ /help để xem các lệnh.`;
     } else if (text.startsWith('/join')) {
       const webUrl = process.env.WEB_URL || 'http://localhost:3005';
       await this.send(chatId,
-        `🔗 *Theo dõi Tạp Hoá Online:*\n\n📱 Telegram: t.me/banhang1\n🌐 Xem tất cả: ${webUrl}/join`
+        `🔗 *Theo dõi Tạp Hoá Online:*\n\n📱 Telegram: t.me/banhang1\n💬 Discord: discord.gg/jNVNf5Kwq\n🌐 Xem tất cả: ${webUrl}/join`
       );
     } else if (text.startsWith('/help')) {
       await this.send(chatId, this.HELP_TEXT);
