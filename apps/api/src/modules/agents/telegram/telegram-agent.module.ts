@@ -6,11 +6,12 @@ import { TelegramAgentController } from './telegram-agent.controller';
 import { TelegramBotService } from './telegram-bot.service';
 import { ImageGeneratorService } from './image-generator.service';
 import { VideoGeneratorService } from './video-generator.service';
+import { TikTokUploaderService } from './tiktok-uploader.service';
 
 @Module({
   imports: [TypeOrmModule.forFeature([AgentLog])],
-  providers: [TelegramAgentService, TelegramBotService, ImageGeneratorService, VideoGeneratorService],
+  providers: [TelegramAgentService, TelegramBotService, ImageGeneratorService, VideoGeneratorService, TikTokUploaderService],
   controllers: [TelegramAgentController],
-  exports: [TelegramAgentService, TelegramBotService, ImageGeneratorService, VideoGeneratorService],
+  exports: [TelegramAgentService, TelegramBotService, ImageGeneratorService, VideoGeneratorService, TikTokUploaderService],
 })
 export class TelegramAgentModule {}

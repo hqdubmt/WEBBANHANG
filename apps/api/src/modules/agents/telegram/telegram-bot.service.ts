@@ -103,6 +103,22 @@ Gõ /help để xem các lệnh.`;
     }
   }
 
+  async sendPhoto(chatId: string | number, photo: Buffer, caption?: string): Promise<void> {
+    try {
+      const FormData = require('form-data');
+      const form = new FormData();
+      form.append('chat_id', String(chatId));
+      form.append('photo', photo, { filename: 'qr.png', contentType: 'image/png' });
+      if (caption) form.append('caption', caption);
+      await axios.post(`https://api.telegram.org/bot${this.token}/sendPhoto`, form, {
+        headers: form.getHeaders(),
+        timeout: 15000,
+      });
+    } catch (e: any) {
+      this.logger.debug(`sendPhoto lỗi: ${e.message}`);
+    }
+  }
+
   // Đăng ký webhook với Telegram
   async registerWebhook(webhookUrl: string): Promise<boolean> {
     try {

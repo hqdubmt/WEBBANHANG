@@ -2,6 +2,7 @@ import { Controller, Post, Get, Body, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { TelegramAgentService } from './telegram-agent.service';
 import { TelegramBotService } from './telegram-bot.service';
+import { TikTokUploaderService } from './tiktok-uploader.service';
 import { Public } from '../../auth/auth.guard';
 
 @ApiTags('Agents - Telegram')
@@ -10,6 +11,7 @@ export class TelegramAgentController {
   constructor(
     private readonly svc: TelegramAgentService,
     private readonly bot: TelegramBotService,
+    private readonly tiktok: TikTokUploaderService,
   ) {}
 
   @Post('run')
@@ -62,5 +64,39 @@ export class TelegramAgentController {
   @ApiOperation({ summary: 'Xem trạng thái webhook hiện tại' })
   webhookInfo() {
     return this.bot.getWebhookInfo();
+  }
+
+  // ─── TikTok Auto Upload (không cần API) ──────────────────────────────────
+
+  @Get('tiktok/status')
+  @ApiOperation({ summary: 'Kiểm tra trạng thái đăng nhập TikTok' })
+  tiktokStatus() {
+    return { loggedIn: this.tiktok.hasSession() };
+  }
+
+  @Post('tiktok/login')
+  @ApiOperation({ summary: 'Lấy QR code đăng nhập TikTok — gửi qua Telegram để quét' })
+  async tiktokLogin() {
+    const qrBuf = await this.tiktok.getLoginQRImage();
+    if (!qrBuf) return { ok: false, message: 'Không lấy được QR code' };
+    // Gửi QR qua Telegram để user quét
+    const channelId = process.env.TELEGRAM_CHANNEL_ID;
+    if (channelId) {
+      await this.bot.sendPhoto(channelId, qrBuf, '📱 Quét QR này để đăng nhập TikTok!\n\n⏱ Có 3 phút. Dùng app TikTok → scan QR → OK!');
+    }
+    return { ok: true, message: 'QR code đã gửi vào Telegram — quét trong 3 phút' };
+  }
+
+  @Post('tiktok/upload')
+  @ApiOperation({ summary: 'Upload video mới nhất từ /tmp/tiktok_videos/ lên TikTok' })
+  async tiktokUpload(@Query('count') count?: string) {
+    return this.tiktok.uploadLatestVideos(count ? parseInt(count) : 1);
+  }
+
+  @Post('tiktok/logout')
+  @ApiOperation({ summary: 'Xoá session TikTok (logout)' })
+  tiktokLogout() {
+    this.tiktok.clearSession();
+    return { ok: true };
   }
 }
