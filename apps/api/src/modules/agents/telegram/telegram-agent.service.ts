@@ -192,12 +192,13 @@ export class TelegramAgentService {
       this.logger.warn('AT Deeplink: Thiếu PID/AID ❌');
       return false;
     }
-    // Test thực tế deeplink — nếu 403 thì campaign chưa được duyệt
+    // Test thực tế deeplink go.isclix.com
     try {
-      const testUrl = `https://www.accesstrade.vn/en/deeplink?pid=${this.AT_PID}&aid=${this.AT_AID}&url=${encodeURIComponent('https://tiki.vn/')}&sub4=check`;
+      const urlEnc = Buffer.from('https://tiki.vn/').toString('base64');
+      const testUrl = `https://go.isclix.com/deep_link/v5/${this.AT_PID}/${this.AT_AID}?sub4=check&url_enc=${encodeURIComponent(urlEnc)}`;
       const res = await axios.get(testUrl, { maxRedirects: 3, timeout: 8000, validateStatus: () => true });
       this.atWorking = res.status < 400;
-      this.logger.log(`AT Deeplink: ${this.atWorking ? 'OK ✅' : `❌ HTTP ${res.status} — campaign chưa duyệt, dùng link trực tiếp`}`);
+      this.logger.log(`AT Deeplink: ${this.atWorking ? 'OK ✅ (go.isclix.com)' : `❌ HTTP ${res.status} — dùng link trực tiếp`}`);
     } catch {
       this.atWorking = false;
       this.logger.warn('AT Deeplink: Không kết nối được, dùng link trực tiếp');
@@ -207,7 +208,8 @@ export class TelegramAgentService {
 
   private buildAffiliateLink(productUrl: string, platform = 'tele'): string {
     if (this.AT_PID && this.AT_AID) {
-      return `https://www.accesstrade.vn/en/deeplink?pid=${this.AT_PID}&aid=${this.AT_AID}&url=${encodeURIComponent(productUrl)}&sub4=${platform}`;
+      const urlEnc = Buffer.from(productUrl).toString('base64');
+      return `https://go.isclix.com/deep_link/v5/${this.AT_PID}/${this.AT_AID}?sub4=${platform}&url_enc=${encodeURIComponent(urlEnc)}`;
     }
     return productUrl;
   }
@@ -268,7 +270,8 @@ export class TelegramAgentService {
 
   private buildShopeeAffiliateLink(productUrl: string): string {
     if (this.AT_PID && this.AT_SHOPEE_AID) {
-      return `https://www.accesstrade.vn/en/deeplink?pid=${this.AT_PID}&aid=${this.AT_SHOPEE_AID}&url=${encodeURIComponent(productUrl)}&sub4=tele`;
+      const urlEnc = Buffer.from(productUrl).toString('base64');
+      return `https://go.isclix.com/deep_link/v5/${this.AT_PID}/${this.AT_SHOPEE_AID}?sub4=tele&url_enc=${encodeURIComponent(urlEnc)}`;
     }
     return productUrl;
   }
