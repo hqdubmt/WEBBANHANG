@@ -31,6 +31,7 @@ module.exports = {
       script: 'dist/main.js',
       interpreter: 'node',
       env: {
+        TZ: 'Asia/Ho_Chi_Minh',
         NODE_ENV: e.NODE_ENV || 'production',
         APP_PORT: e.APP_PORT || 3004,
         APP_SECRET: e.APP_SECRET,
