@@ -44,11 +44,7 @@ export class AffiliateAgentService {
         await new Promise((r) => setTimeout(r, 200));
       }
 
-      // Nếu platform đã cấu hình: cũng chạy thêm bulk discovery
-      if (this.marketplace.configuredPlatforms.length > 0) {
-        const bulkCount = await this.bulkDiscoverNewProducts();
-        this.logger.log(`Affiliate Agent bulk: thêm ${bulkCount} sản phẩm mới từ marketplace`);
-      }
+      // Không tự động thêm sản phẩm mới vào DB
 
       await this.logRepo.update(log.id, {
         status: AgentRunStatus.SUCCESS,
@@ -104,43 +100,6 @@ export class AffiliateAgentService {
       commission: result.commission,
       status: ProductStatus.ACTIVE,
     } as any);
-  }
-
-  // Tìm thêm sản phẩm mới có hoa hồng cao trực tiếp từ marketplace
-  private async bulkDiscoverNewProducts(): Promise<number> {
-    try {
-      const products = await this.marketplace.getTrendingProducts(50);
-      // Chỉ lưu những sản phẩm có hoa hồng >= 5% và đã có affiliate link
-      const highCommission = products.filter((p) => p.commission >= 5 && p.affiliateLink);
-
-      if (highCommission.length === 0) return 0;
-
-      const platformMap: Record<string, ProductSource> = {
-        shopee: ProductSource.SHOPEE,
-        lazada: ProductSource.LAZADA,
-        tiktok: ProductSource.TIKTOK,
-      };
-
-      const entities = highCommission.map((p) => ({
-        name: p.name,
-        category: p.category,
-        price: p.price,
-        image: p.image,
-        trendScore: Math.min(p.sales / 500 + p.commission * 2, 100),
-        source: platformMap[p.platform] || ProductSource.SHOPEE,
-        sourceId: p.sourceId,
-        affiliateLink: p.affiliateLink,
-        commission: p.commission,
-        status: ProductStatus.ACTIVE,
-        meta: { shopName: p.shopName, sales: p.sales, rating: p.rating },
-      }));
-
-      await this.productsService.bulkUpsert(entities);
-      return highCommission.length;
-    } catch (e) {
-      this.logger.error('Bulk discover lỗi:', e.message);
-      return 0;
-    }
   }
 
   // Chạy thủ công cho một sản phẩm cụ thể

@@ -30,6 +30,12 @@ export class TelegramAgentController {
     return this.svc.sendFacebookGroupsContent(5);
   }
 
+  @Post('tiktok-videos')
+  @ApiOperation({ summary: 'Tạo video 9:16 từ deal → đăng Telegram + Discord + lưu để up TikTok' })
+  async tiktokVideos(@Query('count') count?: string) {
+    return this.svc.generateTikTokBatch(count ? parseInt(count) : 3);
+  }
+
   // Telegram Bot Webhook — Telegram gọi endpoint này khi có tin nhắn
   @Public()
   @Post('webhook')

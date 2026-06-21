@@ -3,14 +3,12 @@ import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AiService } from '../../ai/ai.service';
-import { ProductsService } from '../../products/products.service';
 import { MarketplaceService, MarketplaceProduct } from '../../marketplace/marketplace.service';
 import { TikiService } from '../../marketplace/tiki.service';
 import { ShopeeScraperService } from '../../marketplace/shopee-scraper.service';
 import { LazadaScraperService } from '../../marketplace/lazada-scraper.service';
 import { TikTokScraperService } from '../../marketplace/tiktok-scraper.service';
 import { AgentLog, AgentName, AgentRunStatus } from '../../../database/entities/agent-log.entity';
-import { ProductSource, ProductStatus } from '../../../database/entities/product.entity';
 
 interface ScoredProduct extends MarketplaceProduct {
   trendScore: number;
@@ -23,7 +21,6 @@ export class TrendAgentService {
 
   constructor(
     private readonly aiService: AiService,
-    private readonly productsService: ProductsService,
     private readonly marketplace: MarketplaceService,
     private readonly tiki: TikiService,
     private readonly shopeeScraper: ShopeeScraperService,
@@ -198,36 +195,6 @@ Trả về JSON array: [{"idx":1,"score":85,"reason":"..."}]`;
     const ratingScore = p.rating > 0 ? (p.rating / 5) * 25 : 15; // 15 base nếu không có rating
     const nameScore = p.name.length > 20 ? 5 : 0; // sản phẩm có tên đầy đủ
     return Math.round(salesScore + commissionScore + ratingScore + nameScore);
-  }
-
-  private async saveProducts(products: ScoredProduct[]): Promise<void> {
-    const platformMap: Record<string, ProductSource> = {
-      shopee: ProductSource.SHOPEE,
-      lazada: ProductSource.LAZADA,
-      tiktok: ProductSource.TIKTOK,
-      tiki: ProductSource.TIKI,
-    };
-
-    const entities = products.map((p) => ({
-      name: p.name,
-      category: p.category,
-      price: p.price,
-      image: p.image,
-      trendScore: p.trendScore,
-      source: platformMap[p.platform] || ProductSource.SHOPEE,
-      sourceId: p.sourceId,
-      affiliateLink: p.affiliateLink || null,
-      commission: p.commission,
-      status: p.affiliateLink ? ProductStatus.ACTIVE : ProductStatus.PENDING,
-      meta: {
-        reason: p.trendReason,
-        shopName: p.shopName,
-        sales: p.sales,
-        rating: p.rating,
-      },
-    }));
-
-    await this.productsService.bulkUpsert(entities);
   }
 
   private getMockProducts(): MarketplaceProduct[] {

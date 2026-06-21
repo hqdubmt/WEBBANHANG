@@ -7,6 +7,10 @@ import axios from 'axios';
 const FormData = require('form-data');
 import { AgentLog, AgentName, AgentRunStatus } from '../../../database/entities/agent-log.entity';
 import { ImageGeneratorService } from './image-generator.service';
+import { VideoGeneratorService } from './video-generator.service';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 
 interface ScrapedProduct {
   name: string;
@@ -68,6 +72,7 @@ export class TelegramAgentService {
     @InjectRepository(AgentLog)
     private readonly logRepo: Repository<AgentLog>,
     private readonly imgGen: ImageGeneratorService,
+    private readonly videoGen: VideoGeneratorService,
   ) {}
 
   // Cào + đăng mỗi 2 giờ từ 8h-22h lên TẤT CẢ platform
@@ -691,6 +696,138 @@ export class TelegramAgentService {
     }, { timeout: 10000 }).catch(() => {});
 
     return { sent };
+  }
+
+  // ─── TikTok Video Generator ───────────────────────────────────────────────
+
+  // Cron 11h và 19h mỗi ngày — tạo video TikTok từ deal hot nhất
+  @Cron('0 11,19 * * *')
+  async runTikTokVideoJob() {
+    this.logger.log('TikTok Video Job: tạo video...');
+    await this.generateTikTokBatch(3);
+  }
+
+  async generateTikTokBatch(count = 3): Promise<{ generated: number; telegramSent: number; discordSent: number; savedPaths: string[] }> {
+    const products = await this.scrapeTikiProducts(count);
+    const results = { generated: 0, telegramSent: 0, discordSent: 0, savedPaths: [] as string[] };
+
+    for (let i = 0; i < products.length; i++) {
+      const p = products[i];
+      try {
+        const videoBuf = await this.videoGen.generateProductVideo({
+          name: p.name,
+          price: new Intl.NumberFormat('vi-VN').format(p.price) + 'đ',
+          category: p.category,
+          imageUrl: p.image,
+          hook: HOOKS[i % HOOKS.length],
+          source: p.originalUrl.includes('shopee.vn') ? 'shopee' : 'tiki',
+        });
+
+        if (!videoBuf) continue;
+        results.generated++;
+
+        // Lưu ra disk để người dùng tải lên TikTok thủ công
+        const tiktokDir = path.join(os.tmpdir(), 'tiktok_videos');
+        if (!fs.existsSync(tiktokDir)) fs.mkdirSync(tiktokDir, { recursive: true });
+        const filename = `deal_${Date.now()}_${i}.mp4`;
+        const savedPath = path.join(tiktokDir, filename);
+        fs.writeFileSync(savedPath, videoBuf);
+        results.savedPaths.push(savedPath);
+        this.logger.log(`TikTok video lưu: ${savedPath}`);
+
+        // Đăng video lên Telegram
+        const tgOk = await this.postVideoTelegram(p, i, videoBuf);
+        if (tgOk) results.telegramSent++;
+
+        // Đăng video lên Discord
+        const dcOk = await this.postVideoDiscord(p, i, videoBuf);
+        if (dcOk) results.discordSent++;
+
+        await new Promise(r => setTimeout(r, 2000));
+      } catch (e) {
+        this.logger.warn(`TikTok video lỗi sp ${i}: ${e.message}`);
+      }
+    }
+
+    this.logger.log(`TikTok batch: ${JSON.stringify(results)}`);
+    return results;
+  }
+
+  private async postVideoTelegram(p: ScrapedProduct, index: number, videoBuf: Buffer): Promise<boolean> {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) return false;
+
+    const chatIds = [
+      process.env.TELEGRAM_CHANNEL_ID,
+      ...(process.env.TELEGRAM_GROUP_IDS || '').split(',').map(s => s.trim()),
+    ].filter(Boolean);
+    if (chatIds.length === 0) return false;
+
+    const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
+    const isShopee = p.originalUrl.includes('shopee.vn');
+    const link = isShopee ? this.buildShopeeAffiliateLink(p.originalUrl) : this.buildAffiliateLink(p.originalUrl, 'tele');
+    const hook = HOOKS[index % HOOKS.length];
+    const tag = p.category.replace(/\s/g, '').replace(/[&\-\/]/g, '');
+    const caption = `${hook} 🎬\n\n${p.name.slice(0, 80)}\n\n💰 ${pf}\n\n👉 ${link}\n\n#${tag} #tiktokdeal #dealngon`;
+
+    let ok = false;
+    for (const chatId of chatIds) {
+      try {
+        const form = new FormData();
+        form.append('chat_id', chatId);
+        form.append('video', videoBuf, { filename: 'deal.mp4', contentType: 'video/mp4' });
+        form.append('caption', caption.slice(0, 1024));
+        form.append('supports_streaming', 'true');
+        await axios.post(`https://api.telegram.org/bot${token}/sendVideo`, form, {
+          headers: form.getHeaders(),
+          timeout: 60000,
+        });
+        ok = true;
+      } catch (e: any) {
+        this.logger.debug(`Video Telegram [${chatId}] lỗi: ${e.response?.data?.description || e.message}`);
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+    return ok;
+  }
+
+  private async postVideoDiscord(p: ScrapedProduct, index: number, videoBuf: Buffer): Promise<boolean> {
+    const webhooks = [
+      process.env.DISCORD_WEBHOOK_URL,
+      ...(process.env.DISCORD_WEBHOOK_URLS || '').split(',').map(s => s.trim()),
+    ].filter(Boolean);
+    if (webhooks.length === 0) return false;
+
+    const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
+    const isShopee = p.originalUrl.includes('shopee.vn');
+    const link = isShopee ? this.buildShopeeAffiliateLink(p.originalUrl) : this.buildAffiliateLink(p.originalUrl, 'discord');
+    const hook = HOOKS[index % HOOKS.length];
+
+    const embed = {
+      title: `${hook} 🎬 ${p.name.slice(0, 80)}`,
+      description: `💰 **${pf}** | ${p.category}\n\n👉 [Đặt hàng ngay →](${link})\n\n*Video này dành để đăng lên TikTok*`,
+      color: 0xFF0050,
+      footer: { text: 'TikTok Video Deal | t.me/banhang1' },
+    };
+
+    // Discord free limit 25MB — check size
+    if (videoBuf.length > 24 * 1024 * 1024) {
+      this.logger.warn(`Video quá lớn (${Math.round(videoBuf.length / 1024 / 1024)}MB) cho Discord`);
+      const results = await Promise.allSettled(
+        webhooks.map(url => axios.post(url, { embeds: [embed] }, { timeout: 10000 }))
+      );
+      return results.some(r => r.status === 'fulfilled');
+    }
+
+    const results = await Promise.allSettled(
+      webhooks.map(async (url) => {
+        const form = new FormData();
+        form.append('payload_json', JSON.stringify({ embeds: [embed] }));
+        form.append('files[0]', videoBuf, { filename: 'deal.mp4', contentType: 'video/mp4' });
+        return axios.post(url, form, { headers: form.getHeaders(), timeout: 60000 });
+      })
+    );
+    return results.some(r => r.status === 'fulfilled');
   }
 
   async sendCustomerCareMessage(telegramId: string, message: string): Promise<boolean> {
