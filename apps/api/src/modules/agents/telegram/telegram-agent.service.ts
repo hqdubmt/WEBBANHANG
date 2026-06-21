@@ -510,9 +510,30 @@ export class TelegramAgentService {
 
   // ─── Make.com → Facebook Fanpage ─────────────────────────────────────────
 
+  private async uploadToImgbb(imgBuf: Buffer): Promise<string | null> {
+    const key = process.env.IMGBB_API_KEY;
+    if (!key) return null;
+    try {
+      const base64 = imgBuf.toString('base64');
+      const form = new FormData();
+      form.append('key', key);
+      form.append('image', base64);
+      const res = await axios.post('https://api.imgbb.com/1/upload', form, {
+        headers: form.getHeaders(),
+        timeout: 15000,
+      });
+      return res.data?.data?.display_url || res.data?.data?.url || null;
+    } catch (e: any) {
+      this.logger.debug(`imgbb upload lỗi: ${e.message}`);
+      return null;
+    }
+  }
+
   private async postMakeFacebook(p: ScrapedProduct, index: number): Promise<boolean> {
+    const pageId = process.env.FACEBOOK_PAGE_ID;
+    const pageToken = process.env.FACEBOOK_ACCESS_TOKEN;
     const webhookUrl = process.env.MAKE_FACEBOOK_WEBHOOK;
-    if (!webhookUrl) return false;
+    if (!pageId && !webhookUrl) return false;
 
     const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
     const emoji = Object.entries(CAT_EMOJI).find(([k]) => p.category.includes(k))?.[1] ?? '🛒';
@@ -539,21 +560,71 @@ export class TelegramAgentService {
       `📢 Theo dõi Telegram nhận deal sớm hơn: https://t.me/banhang1`,
     ].join('\n');
 
+    // Tạo card 1080x1080 → upload imgbb → lấy public URL
+    let imageUrl: string | null = null;
     try {
-      await axios.post(webhookUrl, {
-        message,
-        link,
-        image_url: p.image || '',
-        title: p.name.slice(0, 200),
-        price: pf,
-        category: p.category,
-        source,
-      }, { timeout: 10000 });
-      return true;
-    } catch (e: any) {
-      this.logger.debug(`Make.com Facebook lỗi: ${e.response?.data || e.message}`);
-      return false;
+      const imgBuf = await this.imgGen.generateProductCard({
+        name: p.name, price: pf, category: p.category,
+        imageUrl: p.image, hook, source: isShopee ? 'shopee' : 'tiki',
+      });
+      if (imgBuf) imageUrl = await this.uploadToImgbb(imgBuf);
+    } catch { /* bỏ qua */ }
+
+    // Cách 1: Gọi thẳng Facebook Graph API (có ảnh branded)
+    if (pageId && pageToken) {
+      try {
+        if (imageUrl) {
+          // POST ảnh kèm caption
+          await axios.post(
+            `https://graph.facebook.com/v19.0/${pageId}/photos`,
+            null,
+            {
+              params: { url: imageUrl, caption: message, access_token: pageToken, published: true },
+              timeout: 15000,
+            },
+          );
+        } else {
+          // Fallback: text + link kèm ảnh gốc Tiki/Shopee
+          await axios.post(
+            `https://graph.facebook.com/v19.0/${pageId}/feed`,
+            null,
+            {
+              params: {
+                message,
+                link: p.image || link,
+                access_token: pageToken,
+              },
+              timeout: 15000,
+            },
+          );
+        }
+        this.logger.log(`Facebook Graph API OK: ${p.name.slice(0, 40)}`);
+        return true;
+      } catch (e: any) {
+        this.logger.debug(`Facebook Graph API lỗi: ${e.response?.data?.error?.message || e.message} → thử Make.com`);
+      }
     }
+
+    // Cách 2: Make.com webhook (fallback nếu Graph API lỗi)
+    if (webhookUrl) {
+      try {
+        await axios.post(webhookUrl, {
+          message,
+          link,
+          image_url: imageUrl || p.image || '',
+          title: p.name.slice(0, 200),
+          price: pf,
+          category: p.category,
+          source,
+        }, { timeout: 10000 });
+        this.logger.log(`Make.com Facebook OK: ${p.name.slice(0, 40)}`);
+        return true;
+      } catch (e: any) {
+        this.logger.debug(`Make.com Facebook lỗi: ${e.response?.data || e.message}`);
+      }
+    }
+
+    return false;
   }
 
   // ─── TikTok Shop Promo ────────────────────────────────────────────────────
