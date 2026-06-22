@@ -57,6 +57,22 @@ export class SellerAccount {
   @Column({ nullable: true })
   partnerId: string;
 
+  // Browser-based session (Playwright login)
+  @Column({ nullable: true })
+  loginType: string; // 'oauth' | 'browser'
+
+  @Column({ nullable: true })
+  username: string;
+
+  @Column({ type: 'text', nullable: true })
+  passwordEncrypted: string;
+
+  @Column({ type: 'jsonb', nullable: true })
+  cookies: any[]; // Playwright cookies array
+
+  @Column({ type: 'jsonb', nullable: true })
+  sessionHeaders: Record<string, string>; // extra headers (CSRF, etc.)
+
   @Column({ type: 'jsonb', nullable: true })
   meta: Record<string, any>;
 

@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import { TiktokSellerService } from './tiktok-seller.service';
 import { LazadaSellerService } from './lazada-seller.service';
 import { ShopeeSellerService } from './shopee-seller.service';
+import { BrowserSellerService } from './browser-seller.service';
 import { SellerAccount, SellerPlatform, SellerAccountStatus } from './entities/seller-account.entity';
 import { SellerProduct } from './entities/seller-product.entity';
 import { SellerOrder, SellerOrderStatus } from './entities/seller-order.entity';
@@ -16,6 +17,7 @@ export class SellerCenterController {
     private readonly tiktok: TiktokSellerService,
     private readonly lazada: LazadaSellerService,
     private readonly shopee: ShopeeSellerService,
+    private readonly browser: BrowserSellerService,
     @InjectRepository(SellerAccount) private readonly accountRepo: Repository<SellerAccount>,
     @InjectRepository(SellerProduct) private readonly productRepo: Repository<SellerProduct>,
     @InjectRepository(SellerOrder)   private readonly orderRepo: Repository<SellerOrder>,
@@ -122,6 +124,44 @@ export class SellerCenterController {
     return { ok: true, account: { id: account.id, shopName: account.shopName, platform: account.platform } };
   }
 
+  // ─── Đăng nhập trực tiếp bằng tài khoản (không cần API key) ─────────────
+
+  @Post('connect/shopee/login')
+  @ApiOperation({ summary: 'Đăng nhập Shopee bằng tài khoản (email/SĐT + mật khẩu)' })
+  async shopeeLogin(@Body('username') username: string, @Body('password') password: string) {
+    if (!username || !password) throw new BadRequestException('Thiếu username hoặc password');
+    const account = await this.browser.loginShopee(username, password);
+    if (!account) throw new BadRequestException('Đăng nhập Shopee thất bại — kiểm tra lại tài khoản/mật khẩu hoặc captcha');
+    return { ok: true, account: { id: account.id, shopName: account.shopName, platform: account.platform, shopId: account.shopId } };
+  }
+
+  @Post('connect/lazada/login')
+  @ApiOperation({ summary: 'Đăng nhập Lazada Seller bằng tài khoản' })
+  async lazadaLogin(@Body('username') username: string, @Body('password') password: string) {
+    if (!username || !password) throw new BadRequestException('Thiếu username hoặc password');
+    const account = await this.browser.loginLazada(username, password);
+    if (!account) throw new BadRequestException('Đăng nhập Lazada thất bại');
+    return { ok: true, account: { id: account.id, shopName: account.shopName, platform: account.platform } };
+  }
+
+  @Post('connect/tiktok/login')
+  @ApiOperation({ summary: 'Đăng nhập TikTok Seller bằng tài khoản' })
+  async tiktokLogin(@Body('username') username: string, @Body('password') password: string) {
+    if (!username || !password) throw new BadRequestException('Thiếu username hoặc password');
+    const account = await this.browser.loginTiktok(username, password);
+    if (!account) throw new BadRequestException('Đăng nhập TikTok thất bại');
+    return { ok: true, account: { id: account.id, shopName: account.shopName, platform: account.platform } };
+  }
+
+  @Post('accounts/:id/relogin')
+  @ApiOperation({ summary: 'Đăng nhập lại khi cookie hết hạn (dùng thông tin đã lưu)' })
+  async relogin(@Param('id') id: string) {
+    const account = await this.accountRepo.findOne({ where: { id } });
+    if (!account) throw new BadRequestException('Không tìm thấy gian hàng');
+    const ok = await this.browser.relogin(account);
+    return { ok };
+  }
+
   // ─── Sync ─────────────────────────────────────────────────────────────────
 
   @Post('accounts/:id/sync/products')
@@ -129,6 +169,15 @@ export class SellerCenterController {
   async syncProducts(@Param('id') id: string) {
     const account = await this.accountRepo.findOne({ where: { id } });
     if (!account) throw new BadRequestException('Không tìm thấy gian hàng');
+
+    if (account.loginType === 'browser') {
+      let count = 0;
+      if (account.platform === SellerPlatform.SHOPEE) count = await this.browser.syncShopeeProducts(account);
+      else if (account.platform === SellerPlatform.LAZADA) count = await this.browser.syncLazadaProducts(account);
+      else if (account.platform === SellerPlatform.TIKTOK) count = await this.browser.syncTiktokProducts(account);
+      return { ok: true, synced: count };
+    }
+
     await this.ensureTokenFresh(account);
     const svc = this.getService(account.platform);
     if (!svc) throw new BadRequestException('Platform không hỗ trợ');
@@ -141,6 +190,16 @@ export class SellerCenterController {
   async syncOrders(@Param('id') id: string, @Query('days') days = '7') {
     const account = await this.accountRepo.findOne({ where: { id } });
     if (!account) throw new BadRequestException('Không tìm thấy gian hàng');
+
+    if (account.loginType === 'browser') {
+      let count = 0;
+      const d = parseInt(days);
+      if (account.platform === SellerPlatform.SHOPEE) count = await this.browser.syncShopeeOrders(account, d);
+      else if (account.platform === SellerPlatform.LAZADA) count = await this.browser.syncLazadaOrders(account, d);
+      else if (account.platform === SellerPlatform.TIKTOK) count = await this.browser.syncTiktokOrders(account, d);
+      return { ok: true, synced: count };
+    }
+
     await this.ensureTokenFresh(account);
     const svc = this.getService(account.platform);
     if (!svc) throw new BadRequestException('Platform không hỗ trợ');
