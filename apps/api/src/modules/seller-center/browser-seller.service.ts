@@ -35,6 +35,118 @@ export class BrowserSellerService {
     @InjectRepository(SellerOrder)   private readonly orderRepo: Repository<SellerOrder>,
   ) {}
 
+  // ── Cookie import (từ browser của user) ──────────────────────────────────
+
+  /**
+   * Parse cookie string (document.cookie format): "name=val; name2=val2"
+   * hoặc JSON array (Cookie Editor extension export)
+   */
+  parseCookieInput(input: string, domain: string): any[] {
+    input = input.trim();
+    // JSON array format (Cookie Editor extension)
+    if (input.startsWith('[')) {
+      try { return JSON.parse(input); } catch { /* fallthrough */ }
+    }
+    // "name=value; name2=value2" format
+    return input.split(';').map(s => {
+      const [name, ...rest] = s.trim().split('=');
+      return { name: name.trim(), value: rest.join('=').trim(), domain, path: '/' };
+    }).filter(c => c.name);
+  }
+
+  async importCookieShopee(cookieInput: string, username = ''): Promise<SellerAccount | null> {
+    const cookies = this.parseCookieInput(cookieInput, '.shopee.vn');
+    if (!cookies.length) return null;
+
+    const csrfToken = cookies.find(c => c.name === 'csrftoken')?.value || '';
+    const shopId = this.extractShopeeShopId(cookies);
+
+    // Validate: thử gọi API với cookie này
+    const testAccount = { cookies, sessionHeaders: { 'X-CSRFTOKEN': csrfToken, 'Referer': 'https://banhang.shopee.vn/' } } as any;
+    const test = await this.call<any>(testAccount, 'GET', 'https://banhang.shopee.vn/api/v3/account/info');
+    const shopName = test?.data?.shop_name || test?.shop_name || username || 'Shopee Account';
+
+    const existing = await this.accountRepo.findOne({ where: { platform: SellerPlatform.SHOPEE, username } });
+    const data: Partial<SellerAccount> = {
+      platform: SellerPlatform.SHOPEE,
+      status: SellerAccountStatus.ACTIVE,
+      loginType: 'browser',
+      username: username || shopName,
+      cookies,
+      sessionHeaders: { 'X-CSRFTOKEN': csrfToken, 'Referer': 'https://banhang.shopee.vn/', 'Origin': 'https://banhang.shopee.vn' },
+      shopId,
+      shopName,
+      accessToken: csrfToken,
+      tokenExpiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000),
+    };
+    if (existing) { await this.accountRepo.update(existing.id, data); return { ...existing, ...data } as SellerAccount; }
+    return this.accountRepo.save(this.accountRepo.create(data));
+  }
+
+  async importCookieLazada(cookieInput: string, username = ''): Promise<SellerAccount | null> {
+    const cookies = this.parseCookieInput(cookieInput, '.lazada.vn');
+    if (!cookies.length) return null;
+
+    const ascToken = cookies.find(c => c.name === '_asc_t')?.value || '';
+    const sessionHeaders: Record<string, string> = {
+      'Authorization': `Bearer ${ascToken}`,
+      'Referer': 'https://sellercenter.lazada.vn/',
+    };
+
+    const testAccount = { cookies, sessionHeaders } as any;
+    const test = await this.call<any>(testAccount, 'GET', 'https://sellercenter.lazada.vn/api/seller/info');
+    const shopName = test?.data?.seller?.name || username || 'Lazada Account';
+
+    const existing = await this.accountRepo.findOne({ where: { platform: SellerPlatform.LAZADA, username } });
+    const data: Partial<SellerAccount> = {
+      platform: SellerPlatform.LAZADA, status: SellerAccountStatus.ACTIVE, loginType: 'browser',
+      username: username || shopName, cookies, sessionHeaders, shopName, accessToken: ascToken,
+      tokenExpiresAt: new Date(Date.now() + 7 * 24 * 3600 * 1000),
+    };
+    if (existing) { await this.accountRepo.update(existing.id, data); return { ...existing, ...data } as SellerAccount; }
+    return this.accountRepo.save(this.accountRepo.create(data));
+  }
+
+  async importCookieTiktok(cookieInput: string, username = ''): Promise<SellerAccount | null> {
+    const cookies = this.parseCookieInput(cookieInput, '.tiktok.com');
+    if (!cookies.length) return null;
+
+    const ttwid = cookies.find(c => c.name === 'ttwid')?.value || '';
+    const csrfToken = cookies.find(c => c.name === 'passport_csrf_token')?.value || '';
+    const sessionHeaders: Record<string, string> = {
+      'x-csrf-token': csrfToken,
+      'Referer': 'https://seller-vn.tiktok.com/',
+    };
+
+    const testAccount = { cookies, sessionHeaders } as any;
+    const test = await this.call<any>(testAccount, 'GET', 'https://seller-vn.tiktok.com/api/seller/platform/shop/info');
+    const shopName = test?.data?.shop_name || username || 'TikTok Shop';
+    const shopId = test?.data?.shop_id?.toString() || '';
+
+    const existing = await this.accountRepo.findOne({ where: { platform: SellerPlatform.TIKTOK, username } });
+    const data: Partial<SellerAccount> = {
+      platform: SellerPlatform.TIKTOK, status: SellerAccountStatus.ACTIVE, loginType: 'browser',
+      username: username || shopName, cookies, sessionHeaders, shopId, shopName, accessToken: ttwid,
+      tokenExpiresAt: new Date(Date.now() + 7 * 24 * 3600 * 1000),
+    };
+    if (existing) { await this.accountRepo.update(existing.id, data); return { ...existing, ...data } as SellerAccount; }
+    return this.accountRepo.save(this.accountRepo.create(data));
+  }
+
+  private extractShopeeShopId(cookies: any[]): string {
+    const spcEc = cookies.find(c => c.name === 'SPC_EC');
+    if (spcEc) {
+      try {
+        const parts = spcEc.value.split('.');
+        if (parts[1]) {
+          const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+          return payload?.shopid?.toString() || '';
+        }
+      } catch { /* ignore */ }
+    }
+    return '';
+  }
+
   // ── Login flows ───────────────────────────────────────────────────────────
 
   async loginShopee(username: string, password: string): Promise<SellerAccount | null> {

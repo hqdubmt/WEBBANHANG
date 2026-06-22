@@ -126,6 +126,35 @@ export class SellerCenterController {
 
   // ─── Đăng nhập trực tiếp bằng tài khoản (không cần API key) ─────────────
 
+  // ─── Import cookie từ browser (không bị CAPTCHA) ─────────────────────────
+
+  @Post('connect/shopee/cookie')
+  @ApiOperation({ summary: 'Import cookie Shopee từ browser (F12 → Console → document.cookie)' })
+  async shopeeCookieImport(@Body('cookie') cookie: string, @Body('username') username?: string) {
+    if (!cookie) throw new BadRequestException('Thiếu cookie string');
+    const account = await this.browser.importCookieShopee(cookie, username);
+    if (!account) throw new BadRequestException('Cookie Shopee không hợp lệ hoặc đã hết hạn');
+    return { ok: true, account: { id: account.id, shopName: account.shopName, platform: account.platform, shopId: account.shopId } };
+  }
+
+  @Post('connect/lazada/cookie')
+  @ApiOperation({ summary: 'Import cookie Lazada từ browser' })
+  async lazadaCookieImport(@Body('cookie') cookie: string, @Body('username') username?: string) {
+    if (!cookie) throw new BadRequestException('Thiếu cookie string');
+    const account = await this.browser.importCookieLazada(cookie, username);
+    if (!account) throw new BadRequestException('Cookie Lazada không hợp lệ hoặc đã hết hạn');
+    return { ok: true, account: { id: account.id, shopName: account.shopName, platform: account.platform } };
+  }
+
+  @Post('connect/tiktok/cookie')
+  @ApiOperation({ summary: 'Import cookie TikTok Seller từ browser' })
+  async tiktokCookieImport(@Body('cookie') cookie: string, @Body('username') username?: string) {
+    if (!cookie) throw new BadRequestException('Thiếu cookie string');
+    const account = await this.browser.importCookieTiktok(cookie, username);
+    if (!account) throw new BadRequestException('Cookie TikTok không hợp lệ hoặc đã hết hạn');
+    return { ok: true, account: { id: account.id, shopName: account.shopName, platform: account.platform } };
+  }
+
   @Post('connect/shopee/login')
   @ApiOperation({ summary: 'Đăng nhập Shopee bằng tài khoản (email/SĐT + mật khẩu)' })
   async shopeeLogin(@Body('username') username: string, @Body('password') password: string) {
