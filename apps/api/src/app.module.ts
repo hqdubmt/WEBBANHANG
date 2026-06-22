@@ -86,6 +86,8 @@ import { SalesModule } from './modules/sales/sales.module';
 import { MarketingOrchestratorModule } from './modules/marketing-orchestrator/marketing-orchestrator.module';
 // Storefront — Customer-facing shop
 import { StorefrontModule } from './modules/storefront/storefront.module';
+// Seller Center — Quản lý gian hàng TikTok / Lazada / Shopee
+import { SellerCenterModule } from './modules/seller-center/seller-center.module';
 
 @Module({
   imports: [
@@ -183,6 +185,8 @@ import { StorefrontModule } from './modules/storefront/storefront.module';
     MarketingOrchestratorModule,
     // Storefront
     StorefrontModule,
+    // Seller Center
+    SellerCenterModule,
     // WebSocket
     GatewayModule,
   ],
