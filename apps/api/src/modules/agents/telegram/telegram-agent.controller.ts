@@ -1,8 +1,13 @@
-import { Controller, Post, Get, Body, Query } from '@nestjs/common';
+import { Controller, Post, Get, Body, Query, Headers, UnauthorizedException } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import * as crypto from 'crypto';
 import { TelegramAgentService } from './telegram-agent.service';
 import { TelegramBotService } from './telegram-bot.service';
 import { TikTokUploaderService } from './tiktok-uploader.service';
+import { ZaloPersonalService } from './zalo-personal.service';
+import { FacebookGroupsService } from './facebook-groups.service';
+import { AiVideoPipelineService } from './ai-video-pipeline.service';
+import { PriorityBrandsService } from './priority-brands.service';
 import { Public } from '../../auth/auth.guard';
 
 @ApiTags('Agents - Telegram')
@@ -12,12 +17,24 @@ export class TelegramAgentController {
     private readonly svc: TelegramAgentService,
     private readonly bot: TelegramBotService,
     private readonly tiktok: TikTokUploaderService,
+    private readonly zalo: ZaloPersonalService,
+    private readonly fbGroups: FacebookGroupsService,
+    private readonly aiVideoPipeline: AiVideoPipelineService,
+    private readonly priorityBrands: PriorityBrandsService,
   ) {}
 
   @Post('run')
   @ApiOperation({ summary: 'Chạy Telegram deals agent' })
   run() {
     return this.svc.runDailyDeals();
+  }
+
+  @Post('priority-brands/refresh')
+  @ApiOperation({ summary: 'Xóa cache sản phẩm ưu tiên (Con Cưng, THEFACESHOP) và scrape lại ngay' })
+  async refreshPriorityBrands() {
+    this.priorityBrands.invalidateCache();
+    const products = await this.priorityBrands.getProducts(10);
+    return { count: products.length, products: products.map(p => ({ name: p.name, price: p.price, url: p.url, brand: p.brand })) };
   }
 
   @Post('tiktok-shop')
@@ -44,11 +61,24 @@ export class TelegramAgentController {
     return this.svc.generateTikTokBatch(count ? parseInt(count) : 3);
   }
 
+  // ─── AI Video Pipeline (Ollama + Piper TTS + FFmpeg) ─────────────────────
+
+  @Post('ai-video/run')
+  @ApiOperation({ summary: 'Chạy AI Video Pipeline: RSS/Shopee → Ollama → Piper TTS → FFmpeg → YouTube/FB Reels/TikTok → Sheets' })
+  async aiVideoPipelineRun(@Query('count') count?: string) {
+    return this.aiVideoPipeline.run(count ? parseInt(count) : 3);
+  }
+
   // Telegram Bot Webhook — Telegram gọi endpoint này khi có tin nhắn
   @Public()
   @Post('webhook')
   @ApiOperation({ summary: 'Telegram bot webhook receiver' })
-  async webhook(@Body() update: any) {
+  async webhook(@Body() update: any, @Headers('x-telegram-bot-api-secret-token') secret: string) {
+    // Xác thực secret token nếu đã cấu hình
+    const expected = process.env.WEBHOOK_SECRET;
+    if (expected && secret !== expected) {
+      throw new UnauthorizedException('Invalid webhook secret');
+    }
     await this.bot.handleUpdate(update);
     return { ok: true };
   }
@@ -97,6 +127,87 @@ export class TelegramAgentController {
   @ApiOperation({ summary: 'Xoá session TikTok (logout)' })
   tiktokLogout() {
     this.tiktok.clearSession();
+    return { ok: true };
+  }
+
+  // ─── Zalo Personal (không cần API key) ───────────────────────────────────
+
+  @Get('zalo/status')
+  @ApiOperation({ summary: 'Trạng thái đăng nhập Zalo personal' })
+  async zaloStatus() {
+    const loggedIn = this.zalo.isLoggedIn() || await this.zalo.restoreSession();
+    const groupCount = loggedIn ? await this.zalo.getGroupCount() : 0;
+    return { loggedIn, groupCount };
+  }
+
+  @Post('zalo/login')
+  @ApiOperation({ summary: 'Lấy QR Zalo — gửi qua Telegram để quét (không cần API key)' })
+  async zaloLogin() {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    const chatId = process.env.TELEGRAM_CHANNEL_ID;
+    if (!token || !chatId) return { ok: false, message: 'Chưa cấu hình Telegram bot' };
+    this.zalo.loginWithQR(token, chatId);
+    return { ok: true, message: 'QR Zalo đang được tạo — kiểm tra Telegram' };
+  }
+
+  @Post('zalo/post')
+  @ApiOperation({ summary: 'Đăng deal vào tất cả Zalo groups (không cần API key)' })
+  async zaloPost(@Query('count') count?: string) {
+    const n = count ? parseInt(count) : 3;
+    const products = await this.svc.getProductsForPosting(n);
+    const sent = await this.zalo.postToGroups(products);
+    return { sent, products: products.length };
+  }
+
+  @Post('zalo/logout')
+  @ApiOperation({ summary: 'Xoá session Zalo' })
+  zaloLogout() {
+    this.zalo.logout();
+    return { ok: true };
+  }
+
+  // ─── Facebook Groups (Playwright, không cần API key) ─────────────────────
+
+  @Get('fb-groups/status')
+  @ApiOperation({ summary: 'Trạng thái đăng nhập Facebook Groups' })
+  fbGroupsStatus() {
+    return { loggedIn: this.fbGroups.isLoggedIn() };
+  }
+
+  @Post('fb-groups/login')
+  @ApiOperation({ summary: 'Hướng dẫn lấy Facebook cookie để đăng nhập không cần API' })
+  async fbGroupsLogin() {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    const chatId = process.env.TELEGRAM_CHANNEL_ID;
+    if (!token || !chatId) return { ok: false };
+    await this.fbGroups.loginWithPlaywright(token, chatId);
+    return { ok: true, message: 'Hướng dẫn đã gửi vào Telegram' };
+  }
+
+  @Post('fb-groups/set-cookie')
+  @ApiOperation({ summary: 'Set Facebook cookie string (từ browser DevTools)' })
+  async fbGroupsSetCookie(@Body() body: { cookie: string }) {
+    const ok = await this.fbGroups.setCookiesFromString(body.cookie);
+    return { ok, message: ok ? 'Đăng nhập Facebook thành công' : 'Cookie không hợp lệ' };
+  }
+
+  @Post('fb-groups/post')
+  @ApiOperation({ summary: 'Auto-post vào Facebook Groups (Playwright, không cần API key)' })
+  async fbGroupsPost(@Query('count') count?: string) {
+    const groupUrls = (process.env.FACEBOOK_GROUP_URLS || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (groupUrls.length === 0) {
+      return { sent: 0, message: 'Chưa cấu hình FACEBOOK_GROUP_URLS trong .env' };
+    }
+    const n = count ? parseInt(count) : 3;
+    const products = await this.svc.getProductsForPosting(n);
+    const sent = await this.fbGroups.postToGroups(products, groupUrls);
+    return { sent, groups: groupUrls.length };
+  }
+
+  @Post('fb-groups/logout')
+  @ApiOperation({ summary: 'Xoá session Facebook Groups' })
+  fbGroupsLogout() {
+    this.fbGroups.logout();
     return { ok: true };
   }
 }

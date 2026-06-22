@@ -26,7 +26,8 @@ export class AuthService {
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
   ) {
-    this.jwtSecret = process.env.APP_SECRET || 'change_this_secret_key';
+    if (!process.env.APP_SECRET) throw new Error('APP_SECRET env variable must be set');
+    this.jwtSecret = process.env.APP_SECRET;
   }
 
   async setupStatus(): Promise<{ needed: boolean }> {
@@ -121,7 +122,7 @@ export class AuthService {
 
   private hashPassword(password: string): string {
     const salt = crypto.randomBytes(16).toString('hex');
-    const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+    const hash = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
     return `${salt}:${hash}`;
   }
 

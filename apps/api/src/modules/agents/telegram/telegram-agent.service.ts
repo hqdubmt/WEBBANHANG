@@ -8,6 +8,7 @@ const FormData = require('form-data');
 import { AgentLog, AgentName, AgentRunStatus } from '../../../database/entities/agent-log.entity';
 import { ImageGeneratorService } from './image-generator.service';
 import { VideoGeneratorService } from './video-generator.service';
+import { PriorityBrandsService } from './priority-brands.service';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -52,6 +53,9 @@ const SHOPEE_KEYWORDS = [
   'kem chống nắng', 'serum vitamin c', 'tai nghe bluetooth',
   'son dưỡng môi', 'vitamin tổng hợp', 'áo thun nữ',
   'giày sneaker', 'bình giữ nhiệt', 'máy massage', 'đồng hồ thông minh',
+  // Ưu tiên baby & beauty để khớp Con Cưng / THEFACESHOP
+  'sữa bột enfamil', 'tã bỉm huggies', 'sữa rửa mặt thefaceshop',
+  'kem chống nắng the face shop', 'tã pampers', 'đồ chơi trẻ em',
 ];
 
 const SHOPEE_CAT_MAP: Record<string, string> = {
@@ -60,6 +64,7 @@ const SHOPEE_CAT_MAP: Record<string, string> = {
   '100017': 'Nhà cửa & Đời sống',
 };
 
+
 @Injectable()
 export class TelegramAgentService {
   private readonly logger = new Logger(TelegramAgentService.name);
@@ -67,12 +72,16 @@ export class TelegramAgentService {
   private readonly AT_PID = process.env.ACCESSTRADE_PID || '';
   private readonly AT_AID = process.env.ACCESSTRADE_TIKI_AID || '';
   private readonly AT_SHOPEE_AID = process.env.ACCESSTRADE_SHOPEE_AID || '';
+  private readonly AT_CONCUNG_AID = process.env.ACCESSTRADE_CONCUNG_AID || '5204532880919025215';
+  private readonly AT_THEFACESHOP_AID = process.env.ACCESSTRADE_THEFACESHOP_AID || '4679977611385258995';
+  private readonly AT_HOANGHA_AID = process.env.ACCESSTRADE_HOANGHA_AID || '5229340396064683522';
 
   constructor(
     @InjectRepository(AgentLog)
     private readonly logRepo: Repository<AgentLog>,
     private readonly imgGen: ImageGeneratorService,
     private readonly videoGen: VideoGeneratorService,
+    private readonly priorityBrands: PriorityBrandsService,
   ) {}
 
   // Cào + đăng mỗi 2 giờ từ 8h-22h lên TẤT CẢ platform
@@ -123,15 +132,41 @@ export class TelegramAgentService {
         this.scrapeShopeeProducts(half),
       ]);
 
-      // Xen kẽ Tiki và Shopee để đa dạng nguồn hàng
-      const products: ScrapedProduct[] = [];
+      // Ưu tiên brand hoa hồng cao (40%) + Tiki/Shopee (60%)
+      const priorityCount = Math.max(2, Math.floor(count * 0.4));
+      const priorityRaw = await this.priorityBrands.getProducts(priorityCount);
+      const priorityProducts: ScrapedProduct[] = priorityRaw.map(p => {
+        const aidMap: Record<string, string> = {
+          'concung.com': this.AT_CONCUNG_AID,
+          'thefaceshop.com.vn': this.AT_THEFACESHOP_AID,
+          'hoanghamobile.com': this.AT_HOANGHA_AID,
+        };
+        const domain = Object.keys(aidMap).find(d => p.url.includes(d)) || '';
+        const aid = aidMap[domain] || this.AT_AID;
+        const urlEnc = Buffer.from(p.url).toString('base64');
+        const affiliateLink = this.AT_PID && aid
+          ? `https://go.isclix.com/deep_link/v5/${this.AT_PID}/${aid}?sub4=tele&url_enc=${encodeURIComponent(urlEnc)}`
+          : p.url;
+        return { name: p.name, price: p.price, image: p.image, category: p.category, affiliateLink, originalUrl: p.url };
+      });
+
+      const tikiShopeeProducts: ScrapedProduct[] = [];
       const maxLen = Math.max(tikiProducts.length, shopeeProducts.length);
       for (let i = 0; i < maxLen; i++) {
-        if (i < tikiProducts.length) products.push(tikiProducts[i]);
-        if (i < shopeeProducts.length) products.push(shopeeProducts[i]);
+        if (i < tikiProducts.length) tikiShopeeProducts.push(tikiProducts[i]);
+        if (i < shopeeProducts.length) tikiShopeeProducts.push(shopeeProducts[i]);
       }
 
-      this.logger.log(`Cào ${tikiProducts.length} Tiki + ${shopeeProducts.length} Shopee → ${products.length} sản phẩm`);
+      // Xen kẽ: 2 sp priority → 3 sp Tiki/Shopee → 2 sp priority → ...
+      const products: ScrapedProduct[] = [];
+      let pi = 0, ti = 0;
+      while (pi < priorityProducts.length || ti < tikiShopeeProducts.length) {
+        if (pi < priorityProducts.length) products.push(priorityProducts[pi++]);
+        if (pi < priorityProducts.length) products.push(priorityProducts[pi++]);
+        for (let k = 0; k < 3 && ti < tikiShopeeProducts.length; k++) products.push(tikiShopeeProducts[ti++]);
+      }
+
+      this.logger.log(`Priority brands: ${priorityProducts.length} | Tiki: ${tikiProducts.length} | Shopee: ${shopeeProducts.length} → ${products.length} tổng`);
 
       const results: Record<string, number> = {
         telegram: 0, discord: 0, zalo: 0, n8n: 0, facebook: 0,
@@ -179,6 +214,24 @@ export class TelegramAgentService {
       });
       return { scraped: 0, results: {} };
     }
+  }
+
+  // Public helper: lấy sản phẩm đã có affiliate link để Zalo/FB dùng
+  async getProductsForPosting(count = 5): Promise<Array<{ name: string; price: number; url: string; image?: string; category?: string }>> {
+    this.atWorking = null;
+    await this.checkATDeeplink();
+    const half = Math.ceil(count / 2);
+    const [tiki, shopee] = await Promise.all([
+      this.scrapeTikiProducts(half),
+      this.scrapeShopeeProducts(half),
+    ]);
+    return [...tiki, ...shopee].slice(0, count).map(p => ({
+      name: p.name,
+      price: p.price,
+      url: p.affiliateLink || p.originalUrl,
+      image: p.image,
+      category: p.category,
+    }));
   }
 
   // ─── Tiki Scraper (không lưu DB) ─────────────────────────────────────────
@@ -301,7 +354,7 @@ export class TelegramAgentService {
             if (!p?.name || !p?.itemid) return;
             const price = Math.round(Number(p.price || p.price_min || 0) / 100000);
             if (price <= 0) return;
-            const url = `https://shopee.vn/${p.name.replace(/\s+/g, '-')}-i.${p.shopid}.${p.itemid}`;
+            const url = `https://shopee.vn/product/${p.shopid}/${p.itemid}`;
             results.push({ name: p.name, price, image: p.image ? `https://down-vn.img.susercontent.com/file/${p.image}` : '', category: 'Shopee', affiliateLink: url, originalUrl: url });
           });
         } catch { /* bị block là bình thường */ }
@@ -317,7 +370,7 @@ export class TelegramAgentService {
             if (!p?.name || !p?.itemid) return;
             const price = Math.round(Number(p.price || p.price_min || 0) / 100000);
             if (price <= 0) return;
-            const url = `https://shopee.vn/${p.name.replace(/\s+/g, '-')}-i.${p.shopid}.${p.itemid}`;
+            const url = `https://shopee.vn/product/${p.shopid}/${p.itemid}`;
             const cat = SHOPEE_CAT_MAP[catId] || 'Shopee';
             results.push({ name: p.name, price, image: p.image ? `https://down-vn.img.susercontent.com/file/${p.image}` : '', category: cat, affiliateLink: url, originalUrl: url });
           });

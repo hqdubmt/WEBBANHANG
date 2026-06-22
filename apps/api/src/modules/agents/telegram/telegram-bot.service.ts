@@ -122,10 +122,12 @@ Gõ /help để xem các lệnh.`;
   // Đăng ký webhook với Telegram
   async registerWebhook(webhookUrl: string): Promise<boolean> {
     try {
+      const secretToken = process.env.WEBHOOK_SECRET;
       const res = await axios.post(`https://api.telegram.org/bot${this.token}/setWebhook`, {
         url: webhookUrl,
         allowed_updates: ['message'],
         drop_pending_updates: true,
+        ...(secretToken ? { secret_token: secretToken } : {}),
       });
       this.logger.log(`Webhook đã đăng ký: ${webhookUrl} → ${res.data?.description}`);
       return res.data?.ok;
