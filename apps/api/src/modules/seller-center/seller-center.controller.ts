@@ -91,7 +91,9 @@ export class SellerCenterController {
   @Get('connect/lazada/url')
   @ApiOperation({ summary: 'Lấy URL đăng nhập Lazada Seller (OAuth)' })
   getLazadaAuthUrl(@Query('redirect_uri') redirectUri: string) {
-    const uri = redirectUri || `${process.env.WEB_URL || 'http://localhost:3005'}/seller/lazada/callback`;
+    const _base = (process.env.WEB_URL || 'http://localhost').replace(/\/$/, '');
+    const _port = process.env.WEB_PORT || '3005';
+    const uri = redirectUri || `${_base}:${_port}/seller/lazada/callback`;
     const url = this.lazada.getAuthUrl(uri);
     if (!url) throw new BadRequestException('Chưa cấu hình LAZADA_APP_KEY');
     return { url };
@@ -109,7 +111,9 @@ export class SellerCenterController {
   @Get('connect/shopee/url')
   @ApiOperation({ summary: 'Lấy URL đăng nhập Shopee Seller (OAuth)' })
   getShopeeAuthUrl(@Query('redirect_uri') redirectUri: string) {
-    const uri = redirectUri || `${process.env.WEB_URL || 'http://localhost:3005'}/seller/shopee/callback`;
+    const __base = (process.env.WEB_URL || 'http://localhost').replace(/\/$/, '');
+    const __port = process.env.WEB_PORT || '3005';
+    const uri = redirectUri || `${__base}:${__port}/seller/shopee/callback`;
     const url = this.shopee.getAuthUrl(uri);
     if (!url) throw new BadRequestException('Chưa cấu hình SHOPEE_PARTNER_ID / SHOPEE_PARTNER_KEY');
     return { url };

@@ -88,6 +88,8 @@ import { MarketingOrchestratorModule } from './modules/marketing-orchestrator/ma
 import { StorefrontModule } from './modules/storefront/storefront.module';
 // Seller Center — Quản lý gian hàng TikTok / Lazada / Shopee
 import { SellerCenterModule } from './modules/seller-center/seller-center.module';
+// Video Automation — Pipeline AI tự động tạo & upload video
+import { VideoAutomationModule } from './modules/video-automation/video-automation.module';
 
 @Module({
   imports: [
@@ -187,6 +189,8 @@ import { SellerCenterModule } from './modules/seller-center/seller-center.module
     StorefrontModule,
     // Seller Center
     SellerCenterModule,
+    // Video Automation
+    VideoAutomationModule,
     // WebSocket
     GatewayModule,
   ],

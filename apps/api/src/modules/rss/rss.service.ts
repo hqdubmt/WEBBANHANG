@@ -69,7 +69,9 @@ export class RssService {
       };
     });
 
-    const siteUrl = process.env.WEB_URL || 'http://14.236.113.160';
+    const _webBase = (process.env.WEB_URL || 'http://localhost').replace(/\/$/, '');
+    const _webPort = process.env.WEB_PORT || '3005';
+    const siteUrl = `${_webBase}:${_webPort}`;
     const now = new Date().toUTCString();
 
     const itemsXml = items.map((item) => `

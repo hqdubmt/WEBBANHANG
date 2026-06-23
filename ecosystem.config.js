@@ -81,6 +81,7 @@ module.exports = {
         N8N_WEBHOOK_URL: e.N8N_WEBHOOK_URL,
         ACCESSTRADE_SHOPEE_AID: e.ACCESSTRADE_SHOPEE_AID || '',
         WEB_URL: e.WEB_URL || '',
+        WEB_PORT: e.WEB_PORT || '3005',
         SMTP_HOST: e.SMTP_HOST,
         SMTP_PORT: e.SMTP_PORT || '587',
         SMTP_USER: e.SMTP_USER,

@@ -81,9 +81,11 @@ Gõ /help để xem các lệnh.`;
     if (text.startsWith('/start')) {
       await this.send(chatId, this.WELCOME_TEXT);
     } else if (text.startsWith('/join')) {
-      const webUrl = process.env.WEB_URL || 'http://localhost:3005';
+      const baseUrl = (process.env.WEB_URL || 'http://localhost').replace(/\/$/, '');
+      const webPort = process.env.WEB_PORT || '3005';
+      const frontendUrl = `${baseUrl}:${webPort}`;
       await this.send(chatId,
-        `🔗 *Theo dõi Tạp Hoá Online:*\n\n📱 Telegram: t.me/banhang1\n💬 Discord: discord.gg/jNVNf5Kwq\n🌐 Xem tất cả: ${webUrl}/join`
+        `🔗 *Theo dõi Tạp Hoá Online:*\n\n📱 Telegram: t.me/banhang1\n💬 Discord: discord.gg/jNVNf5Kwq\n🌐 Xem tất cả: ${frontendUrl}/join`
       );
     } else if (text.startsWith('/help')) {
       await this.send(chatId, this.HELP_TEXT);

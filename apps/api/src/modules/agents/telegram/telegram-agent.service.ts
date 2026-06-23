@@ -391,7 +391,11 @@ export class TelegramAgentService {
 
   private readonly CTA = '\n\n👥 Theo dõi kênh: t.me/banhang1';
 
-  private buildText(link: string, p: ScrapedProduct, index: number): { markdown: string; plain: string } {
+  private escapeHtml(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  private buildText(link: string, p: ScrapedProduct, index: number): { markdown: string; plain: string; html: string } {
     const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
     const emoji = Object.entries(CAT_EMOJI).find(([k]) => p.category.includes(k))?.[1] ?? '🛒';
     const hook = HOOKS[index % HOOKS.length];
@@ -400,8 +404,9 @@ export class TelegramAgentService {
     const source = p.originalUrl.includes('shopee.vn') ? 'shopee' : 'tiki';
     const markdown = `${hook}\n${emoji} *${p.name.slice(0, 80)}*\n\n💰 *${pf}*\n\n🔗 [Đặt hàng ngay](${link})\n\n#${tag} #${source} #deal${this.CTA}`;
     const plain = `${hook}\n${emoji} ${p.name.slice(0, 80)}\n\n💰 ${pf}\n\n🔗 ${link}\n\n#${tag} #${source} #deal${this.CTA}`;
+    const html = `${hook}\n${emoji} <b>${this.escapeHtml(p.name.slice(0, 80))}</b>\n\n💰 <b>${pf}</b>\n\n🔗 <a href="${link}">Đặt hàng ngay</a>\n\n#${tag} #${source} #deal${this.CTA}`;
 
-    return { markdown, plain };
+    return { markdown, plain, html };
   }
 
   // Telegram — gửi ảnh product card + caption
@@ -420,7 +425,7 @@ export class TelegramAgentService {
     const link = isShopee ? this.buildShopeeAffiliateLink(p.originalUrl) : this.buildAffiliateLink(p.originalUrl, 'tele');
     const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
     const hook = HOOKS[index % HOOKS.length];
-    const { plain } = this.buildText(link, p, index);
+    const { html } = this.buildText(link, p, index);
 
     // Tạo ảnh product card
     const imgBuffer = await this.imgGen.generateProductCard({
@@ -437,20 +442,20 @@ export class TelegramAgentService {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           if (imgBuffer) {
-            // Gửi ảnh + caption
+            // Gửi ảnh + caption HTML (link đầy đủ, không bị cắt tại &)
             const form = new FormData();
             form.append('chat_id', chatId);
             form.append('photo', imgBuffer, { filename: 'deal.jpg', contentType: 'image/jpeg' });
-            form.append('caption', plain.slice(0, 1024));
-            form.append('parse_mode', 'Markdown');
+            form.append('caption', html.slice(0, 1024));
+            form.append('parse_mode', 'HTML');
             await axios.post(`https://api.telegram.org/bot${token}/sendPhoto`, form, {
               headers: form.getHeaders(),
               timeout: 30000,
             });
           } else {
-            // Fallback: gửi text nếu không tạo được ảnh
+            // Fallback: gửi text HTML nếu không tạo được ảnh
             await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
-              chat_id: chatId, text: plain, parse_mode: 'Markdown',
+              chat_id: chatId, text: html, parse_mode: 'HTML',
               disable_web_page_preview: false,
             }, { timeout: 20000 });
           }

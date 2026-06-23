@@ -436,6 +436,23 @@ export const sellerApi = {
   updateStock: (id: string, stock: number) => api.put<any>(`/seller/products/${id}/stock`, { stock }),
 };
 
+// Video Automation
+export const videoAutomationApi = {
+  run: (count = 3) => api.post<any>('/video-automation/run', { count }),
+  runs: (limit = 20) => api.get<any[]>(`/video-automation/runs?limit=${limit}`),
+  getRun: (id: string) => api.get<any>(`/video-automation/runs/${id}`),
+  stats: () => api.get<any>('/video-automation/stats'),
+  // Nguồn tin
+  sources: () => api.get<any[]>('/video-automation/sources'),
+  addSource: (data: any) => api.post<any>('/video-automation/sources', data),
+  toggleSource: (id: string) => api.put<any>(`/video-automation/sources/${id}/toggle`, {}),
+  deleteSource: (id: string) => api.delete<any>(`/video-automation/sources/${id}`),
+  backfill: () => api.post<any>('/video-automation/backfill', {}),
+  // Public endpoints — không cần token
+  downloadUrl: (id: string) => `/api/video-automation/runs/${id}/download`,
+  viewUrl:     (id: string) => `/api/video-automation/runs/${id}/view`,
+};
+
 // Users (RBAC)
 export const usersApi = {
   list: (params?: Record<string, any>) => {

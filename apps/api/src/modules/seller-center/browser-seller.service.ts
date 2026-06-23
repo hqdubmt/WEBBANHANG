@@ -419,23 +419,49 @@ export class BrowserSellerService {
 
     try {
       // Tìm và điền OTP input
-      const otpInputs = await page.$$('input[name="code"], input[placeholder*="xác minh"], input[placeholder*="OTP"], input[maxlength="4"]');
+      // Log HTML để debug
+      const bodySnippet = await page.evaluate(() => document.body.innerHTML.substring(0, 2000));
+      this.logger.log(`TikTok OTP page HTML: ${bodySnippet.substring(0, 500)}`);
+
+      const otpInputs = await page.$$('input[name="code"], input[placeholder*="xác minh"], input[placeholder*="OTP"], input[maxlength="4"], input[maxlength="6"]');
       let filled = false;
       for (const inp of otpInputs) {
         if (await inp.isVisible()) {
           await inp.fill(otp);
           filled = true;
+          this.logger.log(`TikTok OTP: filled input with ${otp}`);
           break;
         }
       }
       if (!filled) {
-        // Thử gõ từng số vào các input riêng lẻ (OTP box kiểu 4 ô)
-        const singleInputs = await page.$$('input[type="tel"][maxlength="1"], input[type="number"][maxlength="1"]');
-        if (singleInputs.length >= 4) {
-          for (let i = 0; i < 4 && i < otp.length; i++) {
-            if (await singleInputs[i].isVisible()) await singleInputs[i].fill(otp[i]);
+        // Thử gõ từng số vào các input riêng lẻ (OTP box kiểu 4-6 ô)
+        const singleInputs = await page.$$('input[maxlength="1"]');
+        const visibleSingles: any[] = [];
+        for (const inp of singleInputs) {
+          if (await inp.isVisible()) visibleSingles.push(inp);
+        }
+        if (visibleSingles.length >= 4) {
+          for (let i = 0; i < visibleSingles.length && i < otp.length; i++) {
+            await visibleSingles[i].fill(otp[i]);
           }
           filled = true;
+          this.logger.log(`TikTok OTP: filled ${visibleSingles.length} single inputs`);
+        }
+      }
+      if (!filled) {
+        // Thử điền vào bất kỳ input visible nào
+        const allVisible = await page.$$('input');
+        for (const inp of allVisible) {
+          if (await inp.isVisible()) {
+            const ph = await inp.getAttribute('placeholder') || '';
+            const type = await inp.getAttribute('type') || '';
+            if (type !== 'password' && !ph.includes('email') && !ph.includes('mật khẩu')) {
+              await inp.fill(otp);
+              filled = true;
+              this.logger.log(`TikTok OTP: fallback fill input ph="${ph}"`);
+              break;
+            }
+          }
         }
       }
       if (!filled) { this.cleanupSession(sessionId); return null; }

@@ -55,6 +55,13 @@ import { AiDecision } from './entities/ai-decision.entity';
 // EPIC 04 Omnichannel Inbox
 import { InboxConversation } from './entities/inbox-conversation.entity';
 import { InboxMessage } from './entities/inbox-message.entity';
+// Seller Center
+import { SellerAccount } from '../modules/seller-center/entities/seller-account.entity';
+import { SellerProduct } from '../modules/seller-center/entities/seller-product.entity';
+import { SellerOrder } from '../modules/seller-center/entities/seller-order.entity';
+// Video Automation
+import { VideoAutomationRun } from '../modules/video-automation/entities/video-automation-run.entity';
+import { VideoSource } from '../modules/video-automation/entities/video-source.entity';
 
 @Module({
   imports: [
@@ -84,6 +91,10 @@ import { InboxMessage } from './entities/inbox-message.entity';
         ProductVariant, AiDecision,
         // EPIC 04 Omnichannel Inbox
         InboxConversation, InboxMessage,
+        // Seller Center
+        SellerAccount, SellerProduct, SellerOrder,
+        // Video Automation
+        VideoAutomationRun, VideoSource,
       ],
       synchronize: process.env.NODE_ENV !== 'production',
       logging: process.env.NODE_ENV === 'development',

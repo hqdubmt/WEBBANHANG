@@ -28,6 +28,7 @@ const NAV = [
   { href: '/affiliates', label: 'Affiliate', icon: '🤝' },
   { href: '/accesstrade', label: 'AccessTrade', icon: '🔗' },
   { href: '/seller-center', label: 'Seller Center', icon: '🏪' },
+  { href: '/video-automation', label: 'Video Automation', icon: '🎬' },
   { href: '/marketplace', label: 'Marketplace', icon: '🛍' },
   // V5 — Enterprise & Growth
   { href: '/enterprise', label: 'Enterprise', icon: '🏢' },
