@@ -408,6 +408,34 @@ export const storefrontApi = {
   },
 };
 
+// Seller Center
+export const sellerApi = {
+  dashboard: () => api.get<any>('/seller/dashboard'),
+  accounts: () => api.get<any[]>('/seller/accounts'),
+  disconnect: (id: string) => api.put<any>(`/seller/accounts/${id}/disconnect`, {}),
+  relogin: (id: string) => api.post<any>(`/seller/accounts/${id}/relogin`, {}),
+  loginShopee: (username: string, password: string) => api.post<any>('/seller/connect/shopee/login', { username, password }),
+  loginLazada: (username: string, password: string) => api.post<any>('/seller/connect/lazada/login', { username, password }),
+  loginTiktok: (username: string, password: string) => api.post<any>('/seller/connect/tiktok/login', { username, password }),
+  verifyOtp: (sessionId: string, otp: string) => api.post<any>('/seller/connect/tiktok/verify-otp', { sessionId, otp }),
+  importCookie: (platform: string, cookie: string, username?: string) => api.post<any>(`/seller/connect/${platform}/cookie`, { cookie, username }),
+  syncProducts: (id: string) => api.post<any>(`/seller/accounts/${id}/sync/products`, {}),
+  syncOrders: (id: string, days = 7) => api.post<any>(`/seller/accounts/${id}/sync/orders?days=${days}`, {}),
+  syncAll: () => api.post<any>('/seller/sync/all', {}),
+  products: (params?: Record<string, any>) => {
+    const q = params ? '?' + new URLSearchParams(params as any).toString() : '';
+    return api.get<any>(`/seller/products${q}`);
+  },
+  orders: (params?: Record<string, any>) => {
+    const q = params ? '?' + new URLSearchParams(params as any).toString() : '';
+    return api.get<any>(`/seller/orders${q}`);
+  },
+  pendingOrders: () => api.get<any>('/seller/orders/pending'),
+  shipOrder: (id: string, trackingNumber?: string) => api.post<any>(`/seller/orders/${id}/ship`, { trackingNumber }),
+  updatePrice: (id: string, price: number) => api.put<any>(`/seller/products/${id}/price`, { price }),
+  updateStock: (id: string, stock: number) => api.put<any>(`/seller/products/${id}/stock`, { stock }),
+};
+
 // Users (RBAC)
 export const usersApi = {
   list: (params?: Record<string, any>) => {
