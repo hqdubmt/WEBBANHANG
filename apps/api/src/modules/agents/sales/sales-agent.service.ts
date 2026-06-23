@@ -80,6 +80,7 @@ export class SalesAgentService {
   }
 
   private async buildContextPrompt(userMessage: string): Promise<string> {
+    if (!userMessage) return '';
     const keywords = userMessage.toLowerCase();
     let productContext = '';
 

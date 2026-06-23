@@ -218,6 +218,90 @@ function ResultPanel({ agent, data, duration, onClose }: {
   );
 }
 
+function SalesChatModal({ onClose }: { onClose: () => void }) {
+  const [msgs, setMsgs] = useState<{ role: 'user' | 'bot'; text: string }[]>([
+    { role: 'bot', text: 'Xin chào! Tôi là AI Sales. Bạn cần tư vấn sản phẩm gì?' },
+  ]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const sessionId = useRef(`web-${Date.now()}`);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs]);
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    setInput('');
+    setMsgs(m => [...m, { role: 'user', text }]);
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/agents/sales/chat', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: sessionId.current, platform: 'web', platformUserId: 'dashboard', message: text }),
+      });
+      const data = await res.json();
+      setMsgs(m => [...m, { role: 'bot', text: data.reply || 'Không có phản hồi' }]);
+    } catch {
+      setMsgs(m => [...m, { role: 'bot', text: '❌ Lỗi kết nối AI' }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+      <div className="relative w-full max-w-md bg-white rounded-t-2xl md:rounded-2xl shadow-2xl flex flex-col" style={{ height: '70vh' }} onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 bg-gradient-to-r from-blue-50 to-white rounded-t-2xl md:rounded-t-2xl">
+          <span className="text-2xl">💬</span>
+          <div className="flex-1">
+            <div className="font-bold text-gray-900 text-sm">AI Sales Agent</div>
+            <div className="text-xs text-green-500">● Online</div>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400">✕</button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {msgs.map((m, i) => (
+            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-br-sm' : 'bg-gray-100 text-gray-800 rounded-bl-sm'}`}>
+                {m.text}
+              </div>
+            </div>
+          ))}
+          {loading && (
+            <div className="flex justify-start">
+              <div className="bg-gray-100 rounded-2xl rounded-bl-sm px-3 py-2 text-sm text-gray-500">
+                <span className="animate-pulse">AI đang trả lời...</span>
+              </div>
+            </div>
+          )}
+          <div ref={bottomRef} />
+        </div>
+        <div className="p-3 border-t border-gray-100 flex gap-2">
+          <input
+            className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-400"
+            placeholder="Nhập tin nhắn..."
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && send()}
+            disabled={loading}
+          />
+          <button
+            onClick={send}
+            disabled={loading || !input.trim()}
+            className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-200 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors"
+          >
+            Gửi
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AgentsPage() {
   const [kpi, setKpi] = useState<any>(null);
   const [aiStats, setAiStats] = useState<any>(null);
@@ -225,6 +309,7 @@ export default function AgentsPage() {
   const [results, setResults] = useState<Record<string, string>>({});
   const [panel, setPanel] = useState<{ agent: Agent; data: any; duration: number } | null>(null);
   const [filterCat, setFilterCat] = useState('');
+  const [salesChat, setSalesChat] = useState(false);
 
   useEffect(() => {
     agentsApi.masterKpi().then(setKpi).catch(() => {});
@@ -340,7 +425,7 @@ export default function AgentsPage() {
             </div>
             <div className="flex flex-col gap-1.5">
               <button
-                onClick={() => runAgent(agent)}
+                onClick={() => agent.key === 'sales' ? setSalesChat(true) : runAgent(agent)}
                 disabled={running[agent.key]}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                   running[agent.key]
@@ -348,7 +433,7 @@ export default function AgentsPage() {
                     : 'bg-indigo-600 hover:bg-indigo-700 text-white'
                 }`}
               >
-                {running[agent.key] ? '⏳' : '▶ Run'}
+                {agent.key === 'sales' ? '💬 Chat' : running[agent.key] ? '⏳' : '▶ Run'}
               </button>
               {results[agent.key]?.startsWith('✅') && (
                 <button
@@ -414,6 +499,9 @@ export default function AgentsPage() {
           onClose={() => setPanel(null)}
         />
       )}
+
+      {/* Sales Chat Modal */}
+      {salesChat && <SalesChatModal onClose={() => setSalesChat(false)} />}
     </div>
   );
 }
