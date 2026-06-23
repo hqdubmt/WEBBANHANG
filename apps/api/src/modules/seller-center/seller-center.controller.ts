@@ -174,11 +174,24 @@ export class SellerCenterController {
   }
 
   @Post('connect/tiktok/login')
-  @ApiOperation({ summary: 'Đăng nhập TikTok Seller bằng tài khoản' })
+  @ApiOperation({ summary: 'Đăng nhập TikTok Seller bằng tài khoản (trả về sessionId nếu cần OTP)' })
   async tiktokLogin(@Body('username') username: string, @Body('password') password: string) {
     if (!username || !password) throw new BadRequestException('Thiếu username hoặc password');
-    const account = await this.browser.loginTiktok(username, password);
-    if (!account) throw new BadRequestException('Đăng nhập TikTok thất bại');
+    const result = await this.browser.loginTiktok(username, password);
+    if (!result) throw new BadRequestException('Đăng nhập TikTok thất bại — kiểm tra lại tài khoản/mật khẩu');
+    if ('needOtp' in result) {
+      return { ok: false, needOtp: true, sessionId: result.sessionId, message: result.message };
+    }
+    const account = result.account;
+    return { ok: true, account: { id: account.id, shopName: account.shopName, platform: account.platform } };
+  }
+
+  @Post('connect/tiktok/verify-otp')
+  @ApiOperation({ summary: 'Nhập OTP để hoàn tất đăng nhập TikTok (sau khi gọi /login)' })
+  async tiktokVerifyOtp(@Body('sessionId') sessionId: string, @Body('otp') otp: string) {
+    if (!sessionId || !otp) throw new BadRequestException('Thiếu sessionId hoặc OTP');
+    const account = await this.browser.completeTiktokOtp(sessionId, otp);
+    if (!account) throw new BadRequestException('OTP sai hoặc đã hết hạn (10 phút). Thử đăng nhập lại.');
     return { ok: true, account: { id: account.id, shopName: account.shopName, platform: account.platform } };
   }
 

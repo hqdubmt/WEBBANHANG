@@ -147,6 +147,17 @@ export class BrowserSellerService {
     return '';
   }
 
+  // ── Active Playwright sessions (cho OTP flow) ────────────────────────────
+  private activeSessions = new Map<string, { page: any; context: any; browser: any; platform: string; username: string; password: string; createdAt: number }>();
+
+  private cleanupSession(sessionId: string) {
+    const s = this.activeSessions.get(sessionId);
+    if (s) {
+      s.browser.close().catch(() => {});
+      this.activeSessions.delete(sessionId);
+    }
+  }
+
   // ── Login flows ───────────────────────────────────────────────────────────
 
   async loginShopee(username: string, password: string): Promise<SellerAccount | null> {
@@ -255,18 +266,28 @@ export class BrowserSellerService {
       });
 
       this.logger.log('Lazada: mở trang đăng nhập...');
-      await page.goto('https://sellercenter.lazada.vn/apps/seller/login', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.goto('https://sellercenter.lazada.vn/apps/seller/login?login=1', { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForTimeout(2000);
 
-      await page.fill('input[name="username"], input[type="email"], input[type="text"]', username);
-      await page.fill('input[name="password"], input[type="password"]', password);
+      await page.fill('#account, input[name="account"]', username);
+      await page.fill('#password, input[name="password"]', password);
       await page.waitForTimeout(500);
-      await page.click('button[type="submit"], .login-btn, .submit');
+      await page.click('button[type="submit"]:has-text("Đăng nhập"), button[type="submit"]');
 
-      await page.waitForURL('**/app**', { timeout: 30000 }).catch(() =>
-        page.waitForURL('**/home**', { timeout: 10000 }).catch(() => {})
+      await page.waitForTimeout(6000);
+      const currentUrl1 = page.url();
+      // Kiểm tra lỗi sai mật khẩu
+      const errText = await page.$eval('[class*="error"], [class*="Error"]', e => e.textContent).catch(() => '');
+      if (errText) {
+        this.logger.error(`Lazada login error: ${errText}`);
+        await browser.close();
+        return null;
+      }
+
+      await page.waitForURL('**/seller/main**', { timeout: 20000 }).catch(() =>
+        page.waitForURL('**/apps/login**', { timeout: 5000 }).catch(() => {})
       );
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(2000);
 
       const cookies = await context.cookies() as any[];
       const currentUrl = page.url();
@@ -311,7 +332,7 @@ export class BrowserSellerService {
     }
   }
 
-  async loginTiktok(username: string, password: string): Promise<SellerAccount | null> {
+  async loginTiktok(username: string, password: string): Promise<{ account: SellerAccount } | { needOtp: true; sessionId: string; message: string } | null> {
     try {
       const { chromium } = await import('playwright');
       const browser = await chromium.launch({
@@ -324,76 +345,140 @@ export class BrowserSellerService {
       });
       const page = await context.newPage();
 
-      let shopId = '';
-      page.on('response', async res => {
-        if (res.url().includes('/passport/web/account/info')) {
-          try {
-            const body = await res.json();
-            shopId = body?.data?.shop_id?.toString() || '';
-          } catch { /* ignore */ }
-        }
-      });
-
       this.logger.log('TikTok Seller: mở trang đăng nhập...');
       await page.goto('https://seller-vn.tiktok.com/account/login', { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(3000);
 
-      // Thử login bằng email/phone + password
-      await page.click('[data-e2e="login-tab-email"], .login-tab-email, button:has-text("Email")').catch(() => {});
+      const isEmail = username.includes('@');
+      if (isEmail) {
+        // Tìm và click span "Đăng nhập bằng email"
+        const spans = await page.$$('span');
+        for (const span of spans) {
+          const txt = await span.textContent();
+          const box = await span.boundingBox();
+          if (txt?.includes('bằng email') && box) {
+            await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+            break;
+          }
+        }
+        await page.waitForTimeout(1500);
+        for (const inp of await page.$$('input[name="email"]')) {
+          if (await inp.isVisible()) { await inp.fill(username); break; }
+        }
+      } else {
+        const phone = username.replace(/^\+84/, '').replace(/^0/, '');
+        await page.fill('input[name="mobile"], input[type="tel"]', phone);
+      }
+      for (const inp of await page.$$('input[name="password"]')) {
+        if (await inp.isVisible()) { await inp.fill(password); break; }
+      }
       await page.waitForTimeout(500);
-      await page.fill('input[name="email"], input[type="email"], input[placeholder*="mail"], input[placeholder*="số điện thoại"]', username);
-      await page.fill('input[name="password"], input[type="password"]', password);
-      await page.waitForTimeout(500);
-      await page.click('button[type="submit"], .login-btn');
+      for (const btn of await page.$$('button[type="submit"]')) {
+        if (await btn.isVisible()) { await btn.click(); break; }
+      }
 
-      await page.waitForURL('**/home**', { timeout: 40000 }).catch(() =>
-        page.waitForURL('**/dashboard**', { timeout: 10000 }).catch(() => {})
-      );
-      await page.waitForTimeout(4000);
-
-      const cookies = await context.cookies() as any[];
+      await page.waitForTimeout(6000);
       const currentUrl = page.url();
-      this.logger.log(`TikTok login → ${currentUrl}`);
+
+      // Kiểm tra đã vào dashboard chưa
+      if (!currentUrl.includes('login')) {
+        const cookies = await context.cookies() as any[];
+        await browser.close();
+        return { account: await this.saveTiktokSession(username, password, cookies) };
+      }
+
+      // Kiểm tra cần OTP
+      const pageText = await page.textContent('body') || '';
+      const needOtp = pageText.includes('xác minh') || pageText.includes('OTP') || pageText.includes('mã xác minh');
+      if (needOtp) {
+        const sessionId = `tiktok_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        // Cleanup sessions cũ (> 10 phút)
+        for (const [id, s] of this.activeSessions) {
+          if (Date.now() - s.createdAt > 600000) this.cleanupSession(id);
+        }
+        this.activeSessions.set(sessionId, { page, context, browser, platform: 'tiktok', username, password, createdAt: Date.now() });
+        this.logger.log(`TikTok OTP required, sessionId: ${sessionId}`);
+        return { needOtp: true, sessionId, message: 'OTP 4 số đã được gửi về email/điện thoại. Gọi endpoint /verify-otp với OTP này.' };
+      }
+
+      // Login thất bại
+      const errText = await page.$eval('[class*="error"]', e => e.textContent).catch(() => '');
+      this.logger.error(`TikTok login failed: ${errText || currentUrl}`);
       await browser.close();
-
-      if (!cookies.length || currentUrl.includes('login')) {
-        this.logger.error('TikTok login thất bại');
-        return null;
-      }
-
-      const ttwid = cookies.find(c => c.name === 'ttwid')?.value || '';
-      const csrfToken = cookies.find(c => c.name === 'passport_csrf_token')?.value || '';
-      const sessionHeaders: Record<string, string> = {
-        'x-csrf-token': csrfToken,
-        'Referer': 'https://seller-vn.tiktok.com/',
-      };
-
-      const existing = await this.accountRepo.findOne({
-        where: { platform: SellerPlatform.TIKTOK, username },
-      });
-      const data = {
-        platform: SellerPlatform.TIKTOK,
-        status: SellerAccountStatus.ACTIVE,
-        loginType: 'browser',
-        username,
-        passwordEncrypted: encrypt(password),
-        cookies,
-        sessionHeaders,
-        shopId,
-        shopName: username,
-        accessToken: ttwid,
-        tokenExpiresAt: new Date(Date.now() + 7 * 24 * 3600 * 1000),
-      };
-
-      if (existing) {
-        await this.accountRepo.update(existing.id, data);
-        return { ...existing, ...data };
-      }
-      return this.accountRepo.save(this.accountRepo.create(data));
+      return null;
     } catch (e: any) {
       this.logger.error(`TikTok login error: ${e.message}`);
       return null;
     }
+  }
+
+  async completeTiktokOtp(sessionId: string, otp: string): Promise<SellerAccount | null> {
+    const session = this.activeSessions.get(sessionId);
+    if (!session) return null;
+    const { page, context, browser, username, password } = session;
+
+    try {
+      // Tìm và điền OTP input
+      const otpInputs = await page.$$('input[name="code"], input[placeholder*="xác minh"], input[placeholder*="OTP"], input[maxlength="4"]');
+      let filled = false;
+      for (const inp of otpInputs) {
+        if (await inp.isVisible()) {
+          await inp.fill(otp);
+          filled = true;
+          break;
+        }
+      }
+      if (!filled) {
+        // Thử gõ từng số vào các input riêng lẻ (OTP box kiểu 4 ô)
+        const singleInputs = await page.$$('input[type="tel"][maxlength="1"], input[type="number"][maxlength="1"]');
+        if (singleInputs.length >= 4) {
+          for (let i = 0; i < 4 && i < otp.length; i++) {
+            if (await singleInputs[i].isVisible()) await singleInputs[i].fill(otp[i]);
+          }
+          filled = true;
+        }
+      }
+      if (!filled) { this.cleanupSession(sessionId); return null; }
+
+      await page.waitForTimeout(500);
+      for (const btn of await page.$$('button[type="submit"]')) {
+        if (await btn.isVisible()) { await btn.click(); break; }
+      }
+
+      await page.waitForTimeout(8000);
+      const currentUrl = page.url();
+      this.logger.log(`TikTok OTP result URL: ${currentUrl}`);
+
+      if (currentUrl.includes('login')) {
+        this.logger.error('TikTok OTP sai hoặc hết hạn');
+        this.cleanupSession(sessionId);
+        return null;
+      }
+
+      const cookies = await context.cookies() as any[];
+      await browser.close();
+      this.activeSessions.delete(sessionId);
+      return this.saveTiktokSession(username, password, cookies);
+    } catch (e: any) {
+      this.logger.error(`TikTok OTP error: ${e.message}`);
+      this.cleanupSession(sessionId);
+      return null;
+    }
+  }
+
+  private async saveTiktokSession(username: string, password: string, cookies: any[]): Promise<SellerAccount> {
+    const ttwid = cookies.find(c => c.name === 'ttwid')?.value || '';
+    const csrfToken = cookies.find(c => c.name === 'passport_csrf_token')?.value || '';
+    const sessionHeaders: Record<string, string> = { 'x-csrf-token': csrfToken, 'Referer': 'https://seller-vn.tiktok.com/' };
+    const existing = await this.accountRepo.findOne({ where: { platform: SellerPlatform.TIKTOK, username } });
+    const data: Partial<SellerAccount> = {
+      platform: SellerPlatform.TIKTOK, status: SellerAccountStatus.ACTIVE, loginType: 'browser',
+      username, passwordEncrypted: encrypt(password), cookies, sessionHeaders,
+      shopName: username, accessToken: ttwid,
+      tokenExpiresAt: new Date(Date.now() + 7 * 24 * 3600 * 1000),
+    };
+    if (existing) { await this.accountRepo.update(existing.id, data); return { ...existing, ...data } as SellerAccount; }
+    return this.accountRepo.save(this.accountRepo.create(data));
   }
 
   // ── Re-login khi cookie hết hạn ──────────────────────────────────────────
@@ -406,7 +491,10 @@ export class BrowserSellerService {
     let updated: SellerAccount | null = null;
     if (account.platform === SellerPlatform.SHOPEE) updated = await this.loginShopee(account.username, password);
     if (account.platform === SellerPlatform.LAZADA)  updated = await this.loginLazada(account.username, password);
-    if (account.platform === SellerPlatform.TIKTOK)  updated = await this.loginTiktok(account.username, password);
+    if (account.platform === SellerPlatform.TIKTOK) {
+      const res = await this.loginTiktok(account.username, password);
+      updated = res && 'account' in res ? res.account : null;
+    }
     return !!updated;
   }
 
