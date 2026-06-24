@@ -21,22 +21,26 @@ export class AiService {
       ? [{ role: 'system', content: systemPrompt }, ...messages]
       : messages;
 
+    const fallback = (): AiResponse => {
+      const lastUserMsg = [...allMessages].reverse().find(m => m.role === 'user')?.content || '';
+      return { content: `[AI đang bận, phân tích tự động] ${lastUserMsg.slice(0, 100)}`, tokensUsed: 0, provider: 'ollama' };
+    };
+
     try {
       return await this.callOllama(allMessages);
     } catch (ollamaErr) {
       this.logger.warn(`Ollama failed: ${ollamaErr.message}`);
       const apiKey = process.env.OPENROUTER_API_KEY;
       if (!apiKey) {
-        // Không có OpenRouter key → trả về response giản lược thay vì crash
         this.logger.warn('OpenRouter chưa cấu hình — trả về response mặc định');
-        const lastUserMsg = [...allMessages].reverse().find(m => m.role === 'user')?.content || '';
-        return {
-          content: `[AI đang bận, phân tích tự động] ${lastUserMsg.slice(0, 100)}`,
-          tokensUsed: 0,
-          provider: 'ollama',
-        };
+        return fallback();
       }
-      return await this.callOpenRouter(allMessages);
+      try {
+        return await this.callOpenRouter(allMessages);
+      } catch (openRouterErr) {
+        this.logger.warn(`OpenRouter failed: ${openRouterErr.message}`);
+        return fallback();
+      }
     }
   }
 

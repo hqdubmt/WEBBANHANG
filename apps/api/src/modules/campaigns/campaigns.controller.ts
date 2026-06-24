@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Patch, Param, Body, Query } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Patch, Param, Body, Query, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { CampaignsService } from './campaigns.service';
 import { CampaignSchedulerService } from './campaign-scheduler.service';
@@ -55,7 +55,11 @@ export class CampaignsController {
   @Post(':id/schedule')
   @ApiOperation({ summary: 'Scheduling — lên lịch chạy tự động' })
   schedule(@Param('id') id: string, @Body('scheduledAt') scheduledAt: string) {
-    return this.scheduler.scheduleCampaign(id, new Date(scheduledAt));
+    const date = new Date(scheduledAt);
+    if (!scheduledAt || isNaN(date.getTime())) {
+      throw new BadRequestException('scheduledAt phải là ISO date string hợp lệ');
+    }
+    return this.scheduler.scheduleCampaign(id, date);
   }
 
   @Patch(':id/pause')
