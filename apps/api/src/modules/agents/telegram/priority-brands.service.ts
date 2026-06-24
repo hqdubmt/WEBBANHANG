@@ -8,6 +8,8 @@ export interface BrandProduct {
   url: string;
   category: string;
   brand: string;
+  discount?: number;       // % giảm giá
+  originalPrice?: number;  // giá gốc trước giảm
 }
 
 // Con Cưng chặn hoàn toàn headless và sitemap — dùng curated list thật
@@ -32,30 +34,132 @@ export class PriorityBrandsService {
 
   async getProducts(count = 6): Promise<BrandProduct[]> {
     if (this.cache && Date.now() - this.cache.ts < this.CACHE_TTL) {
-      return [...this.cache.data].sort(() => Math.random() - 0.5).slice(0, count);
+      const cached = this.cache.data;
+      // Ưu tiên sp giảm giá cao lên đầu, phần còn lại random
+      const highDiscount = cached.filter(p => (p.discount || 0) >= 30).sort((a, b) => (b.discount || 0) - (a.discount || 0));
+      const rest = cached.filter(p => (p.discount || 0) < 30).sort(() => Math.random() - 0.5);
+      return [...highDiscount, ...rest].slice(0, count);
     }
 
-    const [tfs, hhm] = await Promise.allSettled([
-      this.scrapeTHEFACESHOP(12),
-      this.scrapeHoangHa(8),
+    const [flash, tfs, hhm] = await Promise.allSettled([
+      this.scrapeHighDiscount(10),
+      this.scrapeTHEFACESHOP(8),
+      this.scrapeHoangHa(6),
     ]);
 
+    const flashItems = flash.status === 'fulfilled' ? flash.value : [];
     const live: BrandProduct[] = [
       ...(tfs.status === 'fulfilled' ? tfs.value : []),
       ...(hhm.status === 'fulfilled' ? hhm.value : []),
     ];
 
-    // Con Cưng curated list — random chọn 5 trong 8
-    const cc = [...CONCUNG_CURATED].sort(() => Math.random() - 0.5).slice(0, 5);
+    // Con Cưng curated list — random chọn 4 trong 8
+    const cc = [...CONCUNG_CURATED].sort(() => Math.random() - 0.5).slice(0, 4);
 
-    const all = [...live, ...cc];
+    const all = [...flashItems, ...live, ...cc];
 
     if (all.length > 0) {
       this.cache = { data: all, ts: Date.now() };
-      this.logger.log(`Priority brands: TFS=${tfs.status === 'fulfilled' ? tfs.value.length : 0} HHM=${hhm.status === 'fulfilled' ? hhm.value.length : 0} CC=${cc.length} → ${all.length} tổng`);
+      this.logger.log(`Priority brands: Flash=${flashItems.length} TFS=${tfs.status === 'fulfilled' ? tfs.value.length : 0} HHM=${hhm.status === 'fulfilled' ? hhm.value.length : 0} CC=${cc.length} → ${all.length} tổng`);
     }
 
-    return [...all].sort(() => Math.random() - 0.5).slice(0, count);
+    // Ưu tiên sp giảm giá cao >= 30% lên đầu
+    const highDiscount = all.filter(p => (p.discount || 0) >= 30).sort((a, b) => (b.discount || 0) - (a.discount || 0));
+    const rest = all.filter(p => (p.discount || 0) < 30).sort(() => Math.random() - 0.5);
+    return [...highDiscount, ...rest].slice(0, count);
+  }
+
+  // Scrape sản phẩm giảm giá cao từ Tiki (flash sale + deals)
+  private async scrapeHighDiscount(limit = 10): Promise<BrandProduct[]> {
+    const results: BrandProduct[] = [];
+
+    // 1. Thử Tiki Flash Sale endpoint
+    try {
+      const flashRes = await axios.get('https://tiki.vn/api/v2/deals/flash-sale', {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+          'Referer': 'https://tiki.vn',
+          'Accept': 'application/json',
+        },
+        timeout: 10000,
+      });
+      const sessions: any[] = flashRes.data?.data || flashRes.data?.items || [];
+      for (const session of sessions.slice(0, 3)) {
+        if (results.length >= limit) break;
+        try {
+          const itemsRes = await axios.get('https://tiki.vn/api/v2/deals/flash-sale/items', {
+            params: { flash_sale_id: session.id, limit: 20 },
+            headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36', 'Referer': 'https://tiki.vn' },
+            timeout: 8000,
+          });
+          const items: any[] = itemsRes.data?.data || [];
+          for (const p of items) {
+            if (results.length >= limit) break;
+            const price = Number(p.price || 0);
+            const listPrice = Number(p.list_price || p.original_price || 0);
+            const discountRate = Number(p.discount_rate || (listPrice > price ? Math.round((listPrice - price) / listPrice * 100) : 0));
+            if (!p.url_key || price <= 0 || discountRate < 20) continue;
+            results.push({
+              name: p.name || '',
+              price,
+              originalPrice: listPrice || undefined,
+              discount: discountRate,
+              image: p.thumbnail_url || '',
+              url: `https://tiki.vn/${p.url_key}.html`,
+              category: p.categories?.name || 'Flash Sale',
+              brand: 'Tiki Flash Sale',
+            });
+          }
+        } catch { /* ignore */ }
+      }
+    } catch (e: any) {
+      this.logger.debug(`Tiki Flash Sale: ${e.message}`);
+    }
+
+    // 2. Fallback: cào từng danh mục Tiki, lọc sp giảm >= 30%
+    if (results.length < limit) {
+      const HIGH_DISCOUNT_CATS = [1789, 8322, 1520, 1883, 8371, 1815];
+      for (const catId of HIGH_DISCOUNT_CATS) {
+        if (results.length >= limit) break;
+        try {
+          const res = await axios.get('https://tiki.vn/api/v2/products', {
+            params: { limit: 30, sort: 'top_seller', category: catId, page: 1 },
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+              'Referer': 'https://tiki.vn',
+              'Accept': 'application/json',
+            },
+            timeout: 10000,
+          });
+          const items: any[] = res.data?.data || [];
+          for (const p of items) {
+            if (results.length >= limit) break;
+            const price = Number(p.price || 0);
+            const listPrice = Number(p.list_price || p.original_price || 0);
+            const discountRate = Number(p.discount_rate || (listPrice > price && price > 0 ? Math.round((listPrice - price) / listPrice * 100) : 0));
+            if (!p.url_key || price <= 0 || discountRate < 30) continue;
+            // Tránh trùng với flash sale đã có
+            const url = `https://tiki.vn/${p.url_key}.html`;
+            if (results.some(r => r.url === url)) continue;
+            results.push({
+              name: p.name || '',
+              price,
+              originalPrice: listPrice || undefined,
+              discount: discountRate,
+              image: p.thumbnail_url || '',
+              url,
+              category: p.categories?.name || 'Tiki Deals',
+              brand: 'Tiki',
+            });
+          }
+          await new Promise(r => setTimeout(r, 300));
+        } catch { /* ignore */ }
+      }
+    }
+
+    const sorted = results.sort((a, b) => (b.discount || 0) - (a.discount || 0));
+    this.logger.log(`High Discount: ${sorted.length} sp (>= 20% off), top: ${sorted[0]?.discount || 0}% off`);
+    return sorted.slice(0, limit);
   }
 
   // THEFACESHOP: dùng API JSON trực tiếp

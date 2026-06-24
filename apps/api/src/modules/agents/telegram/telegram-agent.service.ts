@@ -147,7 +147,7 @@ export class TelegramAgentService {
         const affiliateLink = this.AT_PID && aid
           ? `https://go.isclix.com/deep_link/v5/${this.AT_PID}/${aid}?sub4=tele&url_enc=${encodeURIComponent(urlEnc)}`
           : p.url;
-        return { name: p.name, price: p.price, image: p.image, category: p.category, affiliateLink, originalUrl: p.url };
+        return { name: p.name, price: p.price, image: p.image, category: p.category, affiliateLink, originalUrl: p.url, discount: p.discount };
       });
 
       const tikiShopeeProducts: ScrapedProduct[] = [];
@@ -400,11 +400,13 @@ export class TelegramAgentService {
     const emoji = Object.entries(CAT_EMOJI).find(([k]) => p.category.includes(k))?.[1] ?? '🛒';
     const hook = HOOKS[index % HOOKS.length];
     const tag = p.category.replace(/\s/g, '').replace(/[&\-\/]/g, '');
-
     const source = p.originalUrl.includes('shopee.vn') ? 'shopee' : 'tiki';
-    const markdown = `${hook}\n${emoji} *${p.name.slice(0, 80)}*\n\n💰 *${pf}*\n\n🔗 [Đặt hàng ngay](${link})\n\n#${tag} #${source} #deal${this.CTA}`;
-    const plain = `${hook}\n${emoji} ${p.name.slice(0, 80)}\n\n💰 ${pf}\n\n🔗 ${link}\n\n#${tag} #${source} #deal${this.CTA}`;
-    const html = `${hook}\n${emoji} <b>${this.escapeHtml(p.name.slice(0, 80))}</b>\n\n💰 <b>${pf}</b>\n\n🔗 <a href="${link}">Đặt hàng ngay</a>\n\n#${tag} #${source} #deal${this.CTA}`;
+
+    const discountLine = (p.discount || 0) >= 20 ? `🔥 GIẢM ${p.discount}%\n` : '';
+
+    const markdown = `${hook}\n${discountLine}${emoji} *${p.name.slice(0, 80)}*\n\n💰 *${pf}*\n\n🔗 [Đặt hàng ngay](${link})\n\n#${tag} #${source} #deal${this.CTA}`;
+    const plain    = `${hook}\n${discountLine}${emoji} ${p.name.slice(0, 80)}\n\n💰 ${pf}\n\n🔗 ${link}\n\n#${tag} #${source} #deal${this.CTA}`;
+    const html     = `${hook}\n${discountLine ? `<b>${this.escapeHtml(discountLine.trim())}</b>\n` : ''}${emoji} <b>${this.escapeHtml(p.name.slice(0, 80))}</b>\n\n💰 <b>${pf}</b>\n\n🔗 <a href="${link}">Đặt hàng ngay</a>\n\n#${tag} #${source} #deal${this.CTA}`;
 
     return { markdown, plain, html };
   }
