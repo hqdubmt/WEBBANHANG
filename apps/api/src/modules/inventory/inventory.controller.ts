@@ -1,5 +1,5 @@
-import { Controller, Get, Post, Body, Param, Query } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
+import { Controller, Get, Post, Body, Param } from '@nestjs/common';
+import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { InventoryService } from './inventory.service';
 import { InventoryTxType } from '../../database/entities/inventory.entity';
 
@@ -28,10 +28,9 @@ export class InventoryController {
   }
 
   @Get('low-stock')
-  @ApiOperation({ summary: 'Sản phẩm gần hết hàng' })
-  @ApiQuery({ name: 'threshold', required: false })
-  lowStock(@Query('threshold') threshold?: string) {
-    return this.service.getLowStock(threshold ? parseInt(threshold) : 10);
+  @ApiOperation({ summary: 'Sản phẩm gần hết hàng (chỉ sản phẩm có lowStockThreshold > 0)' })
+  lowStock() {
+    return this.service.getLowStock();
   }
 
   @Get('value')

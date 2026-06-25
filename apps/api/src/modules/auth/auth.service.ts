@@ -128,7 +128,7 @@ export class AuthService {
 
   private verifyPassword(password: string, stored: string): boolean {
     const [salt, hash] = stored.split(':');
-    const check = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+    const check = crypto.pbkdf2Sync(password, salt, 310000, 64, 'sha512').toString('hex');
     return check === hash;
   }
 }

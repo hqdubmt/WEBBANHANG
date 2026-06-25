@@ -289,46 +289,79 @@ export class TelegramAgentService {
       this.logger.warn('Chưa cấu hình ACCESSTRADE_PID / ACCESSTRADE_TIKI_AID');
     }
 
-    const results: ScrapedProduct[] = [];
-    const shuffled = [...TIKI_CATEGORIES].sort(() => Math.random() - 0.5);
-    const catsNeeded = Math.min(shuffled.length, Math.ceil(count / 5));
-    const perCat = Math.ceil(count / catsNeeded);
+    const tikiHeaders = {
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+      'Referer': 'https://tiki.vn', 'Accept': 'application/json',
+    };
 
-    for (const cat of shuffled.slice(0, catsNeeded)) {
-      if (results.length >= count) break;
+    const toScraped = (p: any, catName: string): ScrapedProduct => {
+      const productUrl = `https://tiki.vn/${p.url_key}.html`;
+      return {
+        name: p.name || '',
+        price: p.price,
+        image: p.thumbnail_url || '',
+        category: catName,
+        affiliateLink: productUrl,
+        originalUrl: productUrl,
+        discount: p.discount_rate ?? 0,
+      };
+    };
+
+    // Bước 1: Ưu tiên cào chính hãng giảm giá ≥20% theo từng danh mục
+    const highDiscountResults: ScrapedProduct[] = [];
+    const shuffledCats = [...TIKI_CATEGORIES].sort(() => Math.random() - 0.5);
+
+    await Promise.allSettled(
+      shuffledCats.map(async (cat) => {
+        try {
+          const res = await axios.get('https://tiki.vn/api/v2/products', {
+            params: { limit: 10, sort: 'discount', category: cat.id, is_authentic: 1, discount_from: 20 },
+            headers: tikiHeaders, timeout: 10000,
+          });
+          const items: any[] = (res.data?.data || [])
+            .filter((p: any) => p.url_key && p.price > 0 && (p.discount_rate ?? 0) >= 20);
+          highDiscountResults.push(...items.map(p => toScraped(p, cat.name)));
+        } catch { /* bỏ qua lỗi từng danh mục */ }
+      })
+    );
+
+    // Sắp xếp giảm giá cao nhất lên đầu
+    highDiscountResults.sort((a, b) => (b.discount ?? 0) - (a.discount ?? 0));
+    this.logger.log(`Tiki chính hãng giảm giá: ${highDiscountResults.length} sản phẩm`);
+
+    if (highDiscountResults.length >= count) {
+      return highDiscountResults.slice(0, count);
+    }
+
+    // Bước 2: Bổ sung từ top_seller nếu chưa đủ
+    const fallbackResults: ScrapedProduct[] = [];
+    const needed = count - highDiscountResults.length;
+    const seenUrls = new Set(highDiscountResults.map(p => p.originalUrl));
+    const catsNeeded = Math.min(shuffledCats.length, Math.ceil(needed / 5));
+    const perCat = Math.ceil(needed / catsNeeded);
+
+    for (const cat of shuffledCats.slice(0, catsNeeded)) {
+      if (fallbackResults.length >= needed) break;
       try {
-        const page = Math.floor(Math.random() * 6) + 1;
         const res = await axios.get('https://tiki.vn/api/v2/products', {
-          params: { limit: perCat + 5, sort: 'top_seller', category: cat.id, page },
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-            'Referer': 'https://tiki.vn', 'Accept': 'application/json',
-          },
-          timeout: 10000,
+          params: { limit: perCat + 5, sort: 'top_seller', category: cat.id },
+          headers: tikiHeaders, timeout: 10000,
         });
-
         const items: any[] = res.data?.data || [];
         for (const p of items) {
-          if (results.length >= count) break;
+          if (fallbackResults.length >= needed) break;
           if (!p.url_key || !p.price || p.price <= 0) continue;
-
-          // url_key đã chứa "-p{id}" ở cuối rồi, không thêm nữa
           const productUrl = `https://tiki.vn/${p.url_key}.html`;
-          results.push({
-            name: p.name || '',
-            price: p.price,
-            image: p.thumbnail_url || '',
-            category: cat.name,
-            affiliateLink: productUrl, // platform-specific link built per-post
-            originalUrl: productUrl,
-          });
+          if (seenUrls.has(productUrl)) continue;
+          seenUrls.add(productUrl);
+          fallbackResults.push(toScraped(p, cat.name));
         }
       } catch (e) {
         this.logger.debug(`Tiki scrape lỗi: ${e.message}`);
       }
     }
 
-    return results.sort(() => Math.random() - 0.5).slice(0, count);
+    return [...highDiscountResults, ...fallbackResults].slice(0, count);
   }
 
   // ─── Shopee Scraper ───────────────────────────────────────────────────────

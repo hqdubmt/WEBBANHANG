@@ -56,10 +56,11 @@ export class InventoryService {
     return this.inventoryRepo.save(tx);
   }
 
-  async getLowStock(threshold = 10) {
+  async getLowStock() {
     return this.productRepo
       .createQueryBuilder('p')
-      .where('p.stock <= :threshold', { threshold })
+      .where('p."lowStockThreshold" > 0')
+      .andWhere('p.stock <= p."lowStockThreshold"')
       .andWhere('p.status = :status', { status: 'active' })
       .orderBy('p.stock', 'ASC')
       .getMany();
@@ -70,11 +71,14 @@ export class InventoryService {
       .createQueryBuilder('p')
       .select('SUM(p.stock * p.price)', 'totalValue')
       .addSelect('SUM(p.stock)', 'totalUnits')
+      .addSelect('COUNT(*) FILTER (WHERE p."lowStockThreshold" > 0)', 'trackedProducts')
+      .where('p.source = :source', { source: 'manual' })
       .getRawOne();
 
     return {
       totalValue: Number(result?.totalValue || 0),
       totalUnits: Number(result?.totalUnits || 0),
+      trackedProducts: Number(result?.trackedProducts || 0),
     };
   }
 }

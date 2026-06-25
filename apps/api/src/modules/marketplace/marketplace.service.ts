@@ -17,6 +17,9 @@ export interface MarketplaceProduct {
   shopName: string;
   rating: number;
   originalUrl?: string;
+  discountRate?: number;
+  originalPrice?: number;
+  isAuthentic?: boolean;
 }
 
 export interface AffiliateResult {

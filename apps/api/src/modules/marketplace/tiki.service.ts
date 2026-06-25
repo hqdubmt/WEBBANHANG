@@ -42,6 +42,39 @@ export class TikiService {
     'Accept': 'application/json',
   };
 
+  // Ưu tiên 1: chính hãng giảm giá cao (is_authentic=1, sort=discount)
+  async getHighDiscountAuthentic(perCategory = 15, minDiscount = 20): Promise<MarketplaceProduct[]> {
+    const results: MarketplaceProduct[] = [];
+
+    await Promise.allSettled(
+      TIKI_CATEGORIES.map(async (cat) => {
+        try {
+          const res = await axios.get('https://tiki.vn/api/v2/products', {
+            params: {
+              limit: perCategory,
+              sort: 'discount',
+              category: cat.id,
+              is_authentic: 1,
+              discount_from: minDiscount,
+            },
+            headers: this.headers,
+            timeout: 10000,
+          });
+          const items = (res.data?.data || [])
+            .filter((p: any) => (p.discount_rate ?? 0) >= minDiscount)
+            .map((p: any) => this.normalize(p, cat.name));
+          results.push(...items);
+        } catch {
+          // ignore per-category errors
+        }
+      })
+    );
+
+    // Sắp xếp giảm giá cao nhất lên đầu
+    results.sort((a, b) => (b.discountRate ?? 0) - (a.discountRate ?? 0));
+    return results;
+  }
+
   async getTopSellers(perCategory = 15): Promise<MarketplaceProduct[]> {
     const results: MarketplaceProduct[] = [];
 
@@ -71,7 +104,7 @@ export class TikiService {
       keywords.map(async (kw) => {
         try {
           const res = await axios.get('https://tiki.vn/api/v2/products', {
-            params: { q: kw, limit: limitPerKw, sort: 'top_seller' },
+            params: { q: kw, limit: limitPerKw, sort: 'discount', is_authentic: 1 },
             headers: this.headers,
             timeout: 8000,
           });
@@ -87,19 +120,21 @@ export class TikiService {
   }
 
   async getTrending(limit = 200): Promise<MarketplaceProduct[]> {
-    const [byCat, byKw] = await Promise.all([
-      this.getTopSellers(15),                          // 14 cat × 15 = 210
-      this.searchByKeywords(HOT_KEYWORDS, 5),          // 26 kw  × 5  = 130
+    const [byDiscount, byCat, byKw] = await Promise.all([
+      this.getHighDiscountAuthentic(10, 20),           // chính hãng giảm giá ≥20% — ưu tiên nhất
+      this.getTopSellers(10),                          // 14 cat × 10 = 140
+      this.searchByKeywords(HOT_KEYWORDS, 4),          // 26 kw  × 4  = 104
     ]);
 
     const seen = new Set<string>();
-    const all = [...byCat, ...byKw].filter(p => {
+    // Thứ tự: chính hãng giảm giá cao → top seller → keyword
+    const all = [...byDiscount, ...byCat, ...byKw].filter(p => {
       if (!p.sourceId || seen.has(p.sourceId)) return false;
       seen.add(p.sourceId);
       return true;
     });
 
-    this.logger.log(`Tiki: ${byCat.length} by-cat + ${byKw.length} by-kw = ${all.length} unique`);
+    this.logger.log(`Tiki: ${byDiscount.length} chính-hãng-giảm-giá + ${byCat.length} top-seller + ${byKw.length} keyword = ${all.length} unique`);
     return all.slice(0, limit);
   }
 
@@ -108,12 +143,14 @@ export class TikiService {
     const sold = typeof qty === 'object' && qty ? Number(qty.value ?? 0) : Number(qty ?? 0);
     const cat = p.categories?.name || categoryHint || 'Khác';
     const slug = p.url_key || '';
-    // Tiki url_key already includes -p{id} suffix; only add it if missing
     const productUrl = slug
       ? `https://tiki.vn/${slug}${slug.includes(`p${p.id}`) ? '' : `-p${p.id}`}.html`
       : `https://tiki.vn/p${p.id}.html`;
 
     const affiliateLink = this.at.generateDeepLink(productUrl);
+    const discountRate = Number(p.discount_rate ?? 0);
+    const originalPrice = Number(p.original_price ?? p.list_price ?? 0);
+
     return {
       sourceId: `tiki-${p.id}`,
       platform: 'tiki' as any,
@@ -127,6 +164,9 @@ export class TikiService {
       shopName: p.seller_specifications?.name || p.brand_name || 'Tiki',
       rating: Number(p.rating_average || 0),
       originalUrl: productUrl,
+      discountRate: discountRate > 0 ? discountRate : undefined,
+      originalPrice: originalPrice > 0 ? originalPrice : undefined,
+      isAuthentic: !!p.is_authentic,
     };
   }
 }

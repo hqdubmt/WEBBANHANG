@@ -43,9 +43,9 @@ export class RssService {
     const items: RssItem[] = products.slice(0, 40).map((p) => {
       const affiliateUrl = p.affiliateLink || `https://tiki.vn/${p.sourceId}.html`;
       const price = p.price?.toLocaleString('vi-VN') || '0';
-      const originalPrice = p.original_price
-        ? ` <s>${p.original_price.toLocaleString('vi-VN')}đ</s>` : '';
-      const discount = p.discount_rate ? ` giảm ${p.discount_rate}%` : '';
+      const originalPrice = p.originalPrice
+        ? ` <s>${p.originalPrice.toLocaleString('vi-VN')}đ</s>` : '';
+      const discount = p.discountRate ? ` giảm ${p.discountRate}%` : '';
 
       return {
         title: p.name,
