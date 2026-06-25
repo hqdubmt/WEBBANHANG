@@ -1,5 +1,6 @@
-import { Controller, Post, Get, Body, Query, Headers, UnauthorizedException } from '@nestjs/common';
+import { Controller, Post, Get, Body, Query, Param, Headers, Redirect, UnauthorizedException, Res } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { Response } from 'express';
 import * as crypto from 'crypto';
 import { TelegramAgentService } from './telegram-agent.service';
 import { TelegramBotService } from './telegram-bot.service';
@@ -8,6 +9,26 @@ import { ZaloPersonalService } from './zalo-personal.service';
 import { FacebookGroupsService } from './facebook-groups.service';
 import { AiVideoPipelineService } from './ai-video-pipeline.service';
 import { PriorityBrandsService } from './priority-brands.service';
+import { AffiliateTrackerService } from './affiliate-tracker.service';
+import { ContentVariantService } from './content-variant.service';
+import { RecycleService } from './recycle.service';
+import { AiRankingAgentService } from './ai-ranking-agent.service';
+import { KillSwitchService } from './kill-switch.service';
+import { SelfOptimizationEngineService } from './self-optimization-engine.service';
+import { TikTokAdsLayerService } from './tiktok-ads-layer.service';
+import { AutoBoostService } from './auto-boost.service';
+import { AutoKillService } from './auto-kill.service';
+import { ContentRankEngineService } from './content-rank-engine.service';
+import { MicroDistributionService } from './micro-distribution.service';
+import { DistributionWeightService } from './distribution-weight.service';
+import { RevenueBrainService } from './revenue-brain.service';
+import { AutonomousDecisionService } from './autonomous-decision.service';
+import { ProductLifecycleService } from './product-lifecycle.service';
+import { RevenueAnalyticsService } from './revenue-analytics.service';
+import { AutoScaleService } from './auto-scale.service';
+import { AutoDownrankService } from './auto-downrank.service';
+import { SelfRegulationService } from './self-regulation.service';
+import { EventCollectorService } from './event-collector.service';
 import { Public } from '../../auth/auth.guard';
 
 @ApiTags('Agents - Telegram')
@@ -21,6 +42,26 @@ export class TelegramAgentController {
     private readonly fbGroups: FacebookGroupsService,
     private readonly aiVideoPipeline: AiVideoPipelineService,
     private readonly priorityBrands: PriorityBrandsService,
+    private readonly tracker: AffiliateTrackerService,
+    private readonly abTest: ContentVariantService,
+    private readonly recycle: RecycleService,
+    private readonly aiRanking: AiRankingAgentService,
+    private readonly killSwitch: KillSwitchService,
+    private readonly selfOpt: SelfOptimizationEngineService,
+    private readonly tiktokAdsLayer: TikTokAdsLayerService,
+    private readonly autoBoost: AutoBoostService,
+    private readonly autoKill: AutoKillService,
+    private readonly rankEngine: ContentRankEngineService,
+    private readonly microDist: MicroDistributionService,
+    private readonly distWeight: DistributionWeightService,
+    private readonly revenueBrain: RevenueBrainService,
+    private readonly autonomousDecision: AutonomousDecisionService,
+    private readonly productLifecycle: ProductLifecycleService,
+    private readonly revenueAnalytics: RevenueAnalyticsService,
+    private readonly autoScale: AutoScaleService,
+    private readonly autoDownrank: AutoDownrankService,
+    private readonly selfRegulation: SelfRegulationService,
+    private readonly eventCollector: EventCollectorService,
   ) {}
 
   @Post('run')
@@ -209,5 +250,253 @@ export class TelegramAgentController {
   fbGroupsLogout() {
     this.fbGroups.logout();
     return { ok: true };
+  }
+
+  // ─── Optimization Layer ──────────────────────────────────────────────────
+
+  @Public()
+  @Get('go/:productId')
+  @ApiOperation({ summary: 'Affiliate click tracker — redirect tới affiliate link và ghi nhận click' })
+  async trackAndRedirect(
+    @Param('productId') productId: string,
+    @Query('src') src: string,
+    @Res() res: Response,
+  ) {
+    const source = src || 'unknown';
+    const affiliateLink = this.tracker.trackClick(productId, source);
+    if (!affiliateLink) {
+      res.redirect('https://tiki.vn');
+      return;
+    }
+    res.redirect(302, affiliateLink);
+  }
+
+  @Get('tracker/stats')
+  @ApiOperation({ summary: 'Xem thống kê click tracking — clicks, CTR theo kênh, top sản phẩm' })
+  trackerStats() {
+    return this.tracker.getStats();
+  }
+
+  @Get('ab/stats')
+  @ApiOperation({ summary: 'Xem kết quả A/B test nội dung — variant nào CTR cao nhất' })
+  abStats() {
+    return this.abTest.getStats();
+  }
+
+  @Get('recycle/stats')
+  @ApiOperation({ summary: 'Xem lịch sử post và top performers để recycle' })
+  recycleStats() {
+    return this.recycle.getStats();
+  }
+
+  @Post('recycle/run')
+  @ApiOperation({ summary: 'Chạy Recycle Engine — tái đăng top bài 3-7 ngày trước' })
+  async recycleRun() {
+    return this.svc.runRecycleCycle();
+  }
+
+  @Post('pipeline/run')
+  @ApiOperation({ summary: 'Chạy full Optimization Pipeline: Score → Hook → A/B → Track → Publish → Recycle' })
+  async pipelineRun(@Query('count') count?: string) {
+    return this.svc.runOptimizedPipeline(count ? parseInt(count) : 10);
+  }
+
+  // ─── AI Self-Optimization Layer ──────────────────────────────────────────
+
+  @Get('self-opt/status')
+  @ApiOperation({ summary: 'Trạng thái Self-Optimization Engine: boost queue, rewrite queue, last loop result' })
+  selfOptStatus() {
+    return this.selfOpt.getStatus();
+  }
+
+  @Post('self-opt/run')
+  @ApiOperation({ summary: 'Chạy ngay Self-Optimization Loop (bình thường tự động mỗi 4 tiếng)' })
+  async selfOptRun() {
+    return this.selfOpt.runLoop();
+  }
+
+  @Post('boost/run')
+  @ApiOperation({ summary: 'Boost top sản phẩm trong boost queue — đăng lại với hook tốt nhất' })
+  async boostRun() {
+    return this.svc.runBoostCycle();
+  }
+
+  @Get('kill-switch/stats')
+  @ApiOperation({ summary: 'Xem danh sách sản phẩm đã bị kill switch dừng (CTR quá thấp)' })
+  killSwitchStats() {
+    return this.killSwitch.getStats();
+  }
+
+  @Post('kill-switch/revive/:productId')
+  @ApiOperation({ summary: 'Khôi phục sản phẩm đã bị kill — cho phép đăng lại' })
+  killSwitchRevive(@Param('productId') productId: string) {
+    this.killSwitch.revive(productId);
+    return { ok: true, productId };
+  }
+
+  @Get('ai-ranking/:productId')
+  @ApiOperation({ summary: 'Xem quyết định AI ranking cho một sản phẩm (POST|BOOST|REWRITE|SKIP)' })
+  async aiRankingDecide(
+    @Param('productId') productId: string,
+    @Query('name') name?: string,
+    @Query('category') category?: string,
+  ) {
+    const product = this.tracker.getProduct(productId);
+    return this.aiRanking.decide(
+      productId,
+      name || product?.name || 'Unknown',
+      category || product?.category || 'Unknown',
+    );
+  }
+
+  // ─── TikTok Ads AI Layer ──────────────────────────────────────────────────
+
+  @Get('tiktok-ads/status')
+  @ApiOperation({ summary: 'Trạng thái TikTok Ads AI Layer: test engine, boost/kill queues, leaderboard, channel weights' })
+  tiktokAdsStatus() {
+    return this.tiktokAdsLayer.getStatus();
+  }
+
+  @Post('tiktok-ads/run')
+  @ApiOperation({ summary: 'Chạy ngay TikTok Ads AI Loop: sync → rank → boost/kill → recalibrate weights' })
+  async tiktokAdsRun() {
+    return this.tiktokAdsLayer.triggerLoop();
+  }
+
+  @Get('tiktok-ads/leaderboard')
+  @ApiOperation({ summary: 'Bảng xếp hạng content theo TikTok Ads AI score (BOOST/HOLD/STOP)' })
+  tiktokAdsLeaderboard() {
+    return this.rankEngine.getLeaderboard(20);
+  }
+
+  @Get('tiktok-ads/distribution')
+  @ApiOperation({ summary: 'Xem phân phối traffic từng content: TEST(10%) / EXPANDING(50%) / FULL(100%)' })
+  tiktokAdsDistribution() {
+    return this.microDist.getDistributionSummary();
+  }
+
+  @Get('tiktok-ads/boost-queue')
+  @ApiOperation({ summary: 'Danh sách content WIN đang chờ boost (top score)' })
+  tiktokAdsBoostQueue() {
+    return this.autoBoost.getStats();
+  }
+
+  @Get('tiktok-ads/kill-list')
+  @ApiOperation({ summary: 'Danh sách content bị TikTok AI Layer kill (score < 50)' })
+  tiktokAdsKillList() {
+    return this.autoKill.getStats();
+  }
+
+  @Post('tiktok-ads/kill-revive/:productId')
+  @ApiOperation({ summary: 'Phục hồi content bị TikTok AI Layer kill' })
+  tiktokAdsRevive(@Param('productId') productId: string) {
+    const ok = this.autoKill.revive(productId);
+    return { ok, productId };
+  }
+
+  @Get('tiktok-ads/weights')
+  @ApiOperation({ summary: 'Xem và so sánh distribution weights theo kênh (Telegram/Facebook/Discord/...)' })
+  tiktokAdsWeights() {
+    return this.distWeight.getAllWeights();
+  }
+
+  @Post('tiktok-ads/weights/reset')
+  @ApiOperation({ summary: 'Reset distribution weights về mặc định (Telegram:1.0, Facebook:0.8, ...)' })
+  tiktokAdsWeightsReset() {
+    this.distWeight.resetToDefault();
+    return { ok: true, weights: this.distWeight.getAllWeights() };
+  }
+
+  // ─── Revenue Brain (Fully Autonomous Revenue AI) ──────────────────────────
+
+  @Get('revenue/status')
+  @ApiOperation({ summary: 'Trạng thái Revenue Brain: lifecycle, decisions, scale, downrank, events' })
+  revenueStatus() {
+    return this.revenueBrain.getStatus();
+  }
+
+  @Post('revenue/run')
+  @ApiOperation({ summary: 'Chạy ngay Revenue Brain Loop: lifecycle → profit score → AI decision → scale/downrank → distribution' })
+  async revenueRun() {
+    return this.revenueBrain.triggerLoop();
+  }
+
+  @Get('revenue/report')
+  @ApiOperation({ summary: 'Báo cáo analytics: top sản phẩm, kênh hiệu quả, giờ đăng tốt nhất' })
+  revenueReport() {
+    return this.revenueBrain.getAnalyticsReport();
+  }
+
+  @Get('revenue/brief')
+  @ApiOperation({ summary: 'Daily brief text — tóm tắt hệ thống để gửi Telegram' })
+  revenueBrief() {
+    return { brief: this.revenueBrain.getDailyBrief() };
+  }
+
+  @Get('revenue/decisions')
+  @ApiOperation({ summary: 'Tất cả quyết định AI: BOOST / HOLD / KILL với confidence score' })
+  revenueDecisions() {
+    return this.autonomousDecision.decideAll();
+  }
+
+  @Get('revenue/decisions/:productId')
+  @ApiOperation({ summary: 'Quyết định AI cho 1 sản phẩm cụ thể' })
+  revenueDecide(@Param('productId') productId: string) {
+    return this.autonomousDecision.decide(productId);
+  }
+
+  @Get('revenue/lifecycle')
+  @ApiOperation({ summary: 'Lifecycle stats: NEW/TEST/WINNER/LOSER count + top winners & losers' })
+  revenueLifecycle() {
+    return this.productLifecycle.getStats();
+  }
+
+  @Post('revenue/lifecycle/:productId/revive')
+  @ApiOperation({ summary: 'Hồi phục sản phẩm LOSER về TEST phase để thử lại' })
+  revenueLifecycleRevive(@Param('productId') productId: string) {
+    const ok = this.productLifecycle.revive(productId);
+    return { ok, productId };
+  }
+
+  @Get('revenue/scale')
+  @ApiOperation({ summary: 'Danh sách WINNER đang được scale (tăng publish × multiplier)' })
+  revenueScale() {
+    return this.autoScale.getStats();
+  }
+
+  @Get('revenue/downrank')
+  @ApiOperation({ summary: 'Danh sách LOSER bị downrank hoặc loại khỏi content queue' })
+  revenueDownrank() {
+    return this.autoDownrank.getStats();
+  }
+
+  @Get('revenue/regulation')
+  @ApiOperation({ summary: 'Self-regulation stats: sản phẩm bị throttle, quality score thấp' })
+  revenueRegulation() {
+    return this.selfRegulation.getStats();
+  }
+
+  @Get('revenue/events')
+  @ApiOperation({ summary: 'Event collector stats: tổng events, phân loại theo type' })
+  revenueEvents() {
+    return this.eventCollector.getStats();
+  }
+
+  @Get('revenue/events/hourly')
+  @ApiOperation({ summary: 'Phân tích click/view/post theo giờ trong ngày (7 ngày gần nhất)' })
+  revenueHourlyStats() {
+    return this.eventCollector.getHourlyStats();
+  }
+
+  @Get('revenue/insight/:productId')
+  @ApiOperation({ summary: 'AI giải thích vì sao sản phẩm bán tốt hay kém' })
+  revenueInsight(@Param('productId') productId: string) {
+    return this.revenueBrain.explainProduct(productId);
+  }
+
+  @Get('revenue/compare')
+  @ApiOperation({ summary: 'So sánh 2 kênh phân phối: ?a=telegram&b=facebook' })
+  revenueCompare(@Query('a') a = 'telegram', @Query('b') b = 'facebook') {
+    return this.revenueBrain.compareChannels(a, b);
   }
 }

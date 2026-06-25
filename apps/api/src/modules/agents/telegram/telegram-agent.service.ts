@@ -9,6 +9,12 @@ import { AgentLog, AgentName, AgentRunStatus } from '../../../database/entities/
 import { ImageGeneratorService } from './image-generator.service';
 import { VideoGeneratorService } from './video-generator.service';
 import { PriorityBrandsService } from './priority-brands.service';
+import { ProductScoreService } from './product-score.service';
+import { AffiliateTrackerService } from './affiliate-tracker.service';
+import { ContentVariantService } from './content-variant.service';
+import { RecycleService } from './recycle.service';
+import { KillSwitchService } from './kill-switch.service';
+import { SelfOptimizationEngineService } from './self-optimization-engine.service';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -82,6 +88,12 @@ export class TelegramAgentService {
     private readonly imgGen: ImageGeneratorService,
     private readonly videoGen: VideoGeneratorService,
     private readonly priorityBrands: PriorityBrandsService,
+    private readonly productScore: ProductScoreService,
+    private readonly affiliateTracker: AffiliateTrackerService,
+    private readonly contentVariant: ContentVariantService,
+    private readonly recycleService: RecycleService,
+    private readonly killSwitch: KillSwitchService,
+    private readonly selfOpt: SelfOptimizationEngineService,
   ) {}
 
   // Cào + đăng mỗi 2 giờ từ 8h-22h lên TẤT CẢ platform
@@ -972,6 +984,290 @@ export class TelegramAgentService {
       })
     );
     return results.some(r => r.status === 'fulfilled');
+  }
+
+  // ─── Optimization Pipeline ────────────────────────────────────────────────
+
+  // Full pipeline: Crawl → Score → Hook A/B → Track → Publish
+  async runOptimizedPipeline(count = 10): Promise<{ scored: number; published: number; results: Record<string, number> }> {
+    const log = this.logRepo.create({ agent: AgentName.TELEGRAM, status: AgentRunStatus.RUNNING });
+    await this.logRepo.save(log);
+    const startMs = Date.now();
+
+    try {
+      // 1. Crawl sản phẩm
+      this.atWorking = null;
+      await this.checkATDeeplink();
+
+      const half = Math.ceil(count / 2);
+      const [tikiProducts, shopeeProducts] = await Promise.all([
+        this.scrapeTikiProducts(half),
+        this.scrapeShopeeProducts(half),
+      ]);
+
+      const priorityCount = Math.max(2, Math.floor(count * 0.4));
+      const priorityRaw = await this.priorityBrands.getProducts(priorityCount);
+      const allRaw = [
+        ...priorityRaw.map(p => ({ name: p.name, price: p.price, image: p.image, category: p.category, brand: p.brand, url: p.url, discount: p.discount, originalPrice: p.originalPrice })),
+        ...tikiProducts.map(p => ({ name: p.name, price: p.price, image: p.image, category: p.category, brand: 'Tiki', url: p.originalUrl, discount: p.discount })),
+        ...shopeeProducts.map(p => ({ name: p.name, price: p.price, image: p.image, category: p.category, brand: 'Shopee', url: p.originalUrl, discount: p.discount })),
+      ];
+
+      // 2. Score & filter → top 20%
+      const scored = this.productScore.filter(allRaw, 0.2);
+      this.logger.log(`Optimization Pipeline: ${allRaw.length} sp crawled → ${scored.length} sp qua filter (top 20%)`);
+
+      const results: Record<string, number> = { telegram: 0, discord: 0, zalo: 0, facebook: 0 };
+
+      for (let i = 0; i < scored.length; i++) {
+        const sp = scored[i];
+        const isShopee = sp.url.includes('shopee.vn');
+
+        // 3. Build affiliate link gốc (AT deeplink)
+        const aidMap: Record<string, string> = {
+          'concung.com': this.AT_CONCUNG_AID,
+          'thefaceshop.com.vn': this.AT_THEFACESHOP_AID,
+          'hoanghamobile.com': this.AT_HOANGHA_AID,
+        };
+        const domain = Object.keys(aidMap).find(d => sp.url.includes(d)) || '';
+        const atAffiliateLink = isShopee
+          ? this.buildShopeeAffiliateLink(sp.url)
+          : (domain ? `https://go.isclix.com/deep_link/v5/${this.AT_PID}/${aidMap[domain]}?sub4=opt&url_enc=${encodeURIComponent(Buffer.from(sp.url).toString('base64'))}` : this.buildAffiliateLink(sp.url, 'opt'));
+
+        // 4. Đăng ký tracker → lấy /go/ URL
+        const trackerId = this.affiliateTracker.register(sp.name, sp.category, sp.url, atAffiliateLink);
+
+        // Kill switch: bỏ qua sản phẩm kém đã học được từ data thật
+        if (this.killSwitch.isKilled(trackerId)) {
+          this.logger.debug(`Skip killed product: ${sp.name.slice(0, 40)}`);
+          continue;
+        }
+
+        // Rewrite queue: xóa cache hook → tạo hook mới
+        if (this.selfOpt.isInRewriteQueue(trackerId)) {
+          this.contentVariant.clearVariants(trackerId);
+          this.selfOpt.consumeRewrite(trackerId);
+        }
+
+        // 5. Tạo A/B content variants
+        const variants = await this.contentVariant.createVariants(trackerId, sp, atAffiliateLink);
+        const bestVariant = this.contentVariant.getBestVariant(trackerId) || variants[0];
+        if (!bestVariant) continue;
+
+        // Build tracker URLs per source
+        const tgTrackerUrl = this.affiliateTracker.buildTrackerUrl(trackerId, 'tele');
+        const fbTrackerUrl = this.affiliateTracker.buildTrackerUrl(trackerId, 'fb');
+        const dcTrackerUrl = this.affiliateTracker.buildTrackerUrl(trackerId, 'discord');
+
+        // 6. Publish với tracker URL thay vì direct affiliate link
+        const p: ScrapedProduct = {
+          name: sp.name,
+          price: sp.price,
+          image: sp.image,
+          category: sp.category,
+          affiliateLink: tgTrackerUrl,
+          originalUrl: sp.url,
+          discount: sp.discount,
+        };
+
+        const [tg, dc, zl, fb] = await Promise.allSettled([
+          this.postTelegramWithContent(p, bestVariant.fullText.replace(atAffiliateLink, tgTrackerUrl)),
+          this.postDiscordWithLink(p, dcTrackerUrl, i),
+          this.postZaloOA(p),
+          this.postMakeFacebookWithLink(p, fbTrackerUrl, i),
+        ]);
+
+        if (tg.status === 'fulfilled' && tg.value) results.telegram++;
+        if (dc.status === 'fulfilled' && dc.value) results.discord++;
+        if (zl.status === 'fulfilled' && zl.value) results.zalo++;
+        if (fb.status === 'fulfilled' && fb.value) results.facebook++;
+
+        // Record impression for A/B testing
+        this.contentVariant.recordImpression(trackerId, bestVariant.variantIndex);
+
+        // 7. Ghi vào recycle history
+        this.recycleService.recordPost({
+          trackerId,
+          productName: sp.name,
+          category: sp.category,
+          trackerUrl: tgTrackerUrl,
+          hookUsed: bestVariant.hook,
+          platforms: Object.entries(results).filter(([, v]) => v > 0).map(([k]) => k),
+          postedAt: new Date(),
+        });
+
+        await new Promise(r => setTimeout(r, 1300));
+      }
+
+      await this.logRepo.update(log.id, {
+        status: AgentRunStatus.SUCCESS,
+        output: { scored: scored.length, ...results } as any,
+        durationMs: Date.now() - startMs,
+      });
+
+      this.logger.log(`Optimization Pipeline xong: ${JSON.stringify(results)}`);
+      return { scored: scored.length, published: Object.values(results).reduce((a, b) => a + b, 0), results };
+    } catch (e) {
+      await this.logRepo.update(log.id, { status: AgentRunStatus.FAILED, errorMessage: e.message, durationMs: Date.now() - startMs });
+      this.logger.error(`Optimization Pipeline lỗi: ${e.message}`);
+      return { scored: 0, published: 0, results: {} };
+    }
+  }
+
+  // Recycle Engine: tái đăng top bài 3-7 ngày trước với hook mới
+  async runRecycleCycle(): Promise<{ recycled: number; results: Record<string, number> }> {
+    const candidates = this.recycleService.getCandidates(3, 7, 5);
+    if (candidates.length === 0) {
+      this.logger.log('Recycle: Không có bài đủ điều kiện (3-7 ngày, có click)');
+      return { recycled: 0, results: {} };
+    }
+
+    const results: Record<string, number> = { telegram: 0, discord: 0 };
+    let recycled = 0;
+
+    for (const candidate of candidates) {
+      const product = this.affiliateTracker.getProduct(candidate.trackerId);
+      if (!product) continue;
+
+      // Xoay hook để không trùng lặp nội dung cũ
+      const variants = await this.contentVariant.createVariants(candidate.trackerId, {
+        name: product.name, price: 0, image: '', url: product.originalUrl,
+        category: product.category, brand: '',
+      }, product.affiliateLink);
+
+      // Dùng variant tiếp theo (không phải best để tránh trùng)
+      const nextVariant = variants[recycled % variants.length] || variants[0];
+      if (!nextVariant) continue;
+
+      const tgTrackerUrl = this.affiliateTracker.buildTrackerUrl(candidate.trackerId, 'tele');
+      const recycleText = `♻️ *TOP DEAL TUẦN NÀY*\n\n${nextVariant.fullText.replace(product.affiliateLink, tgTrackerUrl)}`;
+
+      // Gửi lên Telegram
+      const token = process.env.TELEGRAM_BOT_TOKEN;
+      const chatIds = [
+        process.env.TELEGRAM_CHANNEL_ID,
+        ...(process.env.TELEGRAM_GROUP_IDS || '').split(',').map(s => s.trim()),
+      ].filter(Boolean);
+
+      for (const chatId of chatIds) {
+        try {
+          await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+            chat_id: chatId, text: recycleText, parse_mode: 'Markdown',
+            disable_web_page_preview: false,
+          }, { timeout: 20000 });
+          results.telegram++;
+        } catch (e) {
+          this.logger.debug(`Recycle Telegram lỗi: ${e.message}`);
+        }
+      }
+
+      this.recycleService.markRecycled(candidate.trackerId);
+      recycled++;
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    this.logger.log(`Recycle xong: ${recycled} bài tái đăng`);
+    return { recycled, results };
+  }
+
+  // Helper: post Telegram với content tự do (từ hook agent)
+  private async postTelegramWithContent(p: ScrapedProduct, content: string): Promise<boolean> {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) return false;
+
+    const chatIds = [
+      process.env.TELEGRAM_CHANNEL_ID,
+      ...(process.env.TELEGRAM_GROUP_IDS || '').split(',').map(s => s.trim()),
+    ].filter(Boolean);
+    if (chatIds.length === 0) return false;
+
+    const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
+    const hook = content.split('\n')[0] || '🔥 HOT DEAL';
+
+    const imgBuffer = await this.imgGen.generateProductCard({
+      name: p.name, price: pf, category: p.category,
+      imageUrl: p.image, hook, source: p.originalUrl.includes('shopee.vn') ? 'shopee' : 'tiki',
+    });
+
+    let ok = false;
+    for (const chatId of chatIds) {
+      try {
+        if (imgBuffer) {
+          const form = new FormData();
+          form.append('chat_id', chatId);
+          form.append('photo', imgBuffer, { filename: 'deal.jpg', contentType: 'image/jpeg' });
+          form.append('caption', content.slice(0, 1024));
+          form.append('parse_mode', 'Markdown');
+          await axios.post(`https://api.telegram.org/bot${token}/sendPhoto`, form, { headers: form.getHeaders(), timeout: 30000 });
+        } else {
+          await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+            chat_id: chatId, text: content.slice(0, 4096), parse_mode: 'Markdown',
+          }, { timeout: 20000 });
+        }
+        ok = true;
+      } catch (e: any) {
+        this.logger.debug(`Telegram [${chatId}] lỗi: ${e.response?.data?.description || e.message}`);
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+    return ok;
+  }
+
+  // Helper: Discord với tracker link
+  private async postDiscordWithLink(p: ScrapedProduct, link: string, index: number): Promise<boolean> {
+    return this.postDiscord({ ...p, affiliateLink: link }, index);
+  }
+
+  // Helper: Facebook với tracker link
+  private async postMakeFacebookWithLink(p: ScrapedProduct, link: string, index: number): Promise<boolean> {
+    return this.postMakeFacebook({ ...p, affiliateLink: link, originalUrl: p.originalUrl }, index);
+  }
+
+  // ─── Boost Cycle ─────────────────────────────────────────────────────────
+
+  // Đăng lại sản phẩm trong boost queue với hook tốt nhất + badge BOOST
+  async runBoostCycle(): Promise<{ boosted: number; results: Record<string, number> }> {
+    const boostIds = this.selfOpt.getStatus().boostQueue;
+    if (boostIds.length === 0) {
+      this.logger.log('Boost Cycle: Boost queue trống');
+      return { boosted: 0, results: {} };
+    }
+
+    const results: Record<string, number> = { telegram: 0, discord: 0 };
+    let boosted = 0;
+
+    for (const productId of boostIds.slice(0, 5)) {
+      const product = this.affiliateTracker.getProduct(productId);
+      if (!product) continue;
+
+      const bestVariant = this.contentVariant.getBestVariant(productId);
+      if (!bestVariant) continue;
+
+      const boostText = `🚀 *TOP DEAL — ĐANG HOT*\n\n${bestVariant.fullText}`;
+      const token = process.env.TELEGRAM_BOT_TOKEN;
+      const chatIds = [
+        process.env.TELEGRAM_CHANNEL_ID,
+        ...(process.env.TELEGRAM_GROUP_IDS || '').split(',').map(s => s.trim()),
+      ].filter(Boolean);
+
+      for (const chatId of chatIds) {
+        try {
+          await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+            chat_id: chatId, text: boostText, parse_mode: 'Markdown', disable_web_page_preview: false,
+          }, { timeout: 20000 });
+          results.telegram++;
+        } catch (e) {
+          this.logger.debug(`Boost Telegram lỗi: ${e.message}`);
+        }
+      }
+
+      this.logger.log(`Boost: ${product.name.slice(0, 40)} (${product.clicks} clicks)`);
+      boosted++;
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    this.logger.log(`Boost Cycle xong: ${boosted} sản phẩm`);
+    return { boosted, results };
   }
 
   async sendCustomerCareMessage(telegramId: string, message: string): Promise<boolean> {
