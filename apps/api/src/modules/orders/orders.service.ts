@@ -124,8 +124,9 @@ export class OrdersService {
     return this.findOne(id);
   }
 
-  async getRevenueSummary(days = 30): Promise<{ total: number; orders: number; avgOrder: number }> {
-    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  async getRevenueSummary(days: number = 30): Promise<{ total: number; orders: number; avgOrder: number }> {
+    const safeDays = Number.isFinite(days) && days > 0 ? days : 30;
+    const from = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000);
     const result = await this.orderRepo
       .createQueryBuilder('o')
       .select('SUM(o.total)', 'total')

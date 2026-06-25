@@ -26,6 +26,11 @@ export class CampaignsService {
 
   async update(id: string, data: Partial<Campaign>) {
     await this.findOne(id);
+    if (data.scheduledAt !== undefined && data.scheduledAt !== null) {
+      const d = data.scheduledAt instanceof Date ? data.scheduledAt : new Date(data.scheduledAt as any);
+      if (isNaN(d.getTime())) delete data.scheduledAt;
+      else data.scheduledAt = d;
+    }
     await this.repo.update(id, data);
     return this.findOne(id);
   }

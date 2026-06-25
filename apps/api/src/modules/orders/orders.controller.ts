@@ -43,8 +43,9 @@ export class OrdersController {
 
   @Get('revenue')
   @ApiOperation({ summary: 'Tổng quan doanh thu' })
-  revenue(@Query('days') days?: number) {
-    return this.service.getRevenueSummary(days);
+  revenue(@Query('days') days?: string) {
+    const d = parseInt(days as string, 10);
+    return this.service.getRevenueSummary(isNaN(d) || d <= 0 ? 30 : d);
   }
 
   @Get('stats')

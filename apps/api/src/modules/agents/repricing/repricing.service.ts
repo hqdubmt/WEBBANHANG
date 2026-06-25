@@ -85,7 +85,16 @@ Trả lời JSON: { newPrice, reason, changePercent }`;
     try {
       const raw = await this.aiService.generate(prompt);
       const match = raw.match(/\{[\s\S]*\}/);
-      if (match) return JSON.parse(match[0]);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        if (parsed.newPrice !== undefined) {
+          const raw = parsed.newPrice;
+          parsed.newPrice = typeof raw === 'number' && !isNaN(raw)
+            ? raw
+            : parseFloat(String(raw).replace(/[^0-9.]/g, ''));
+        }
+        return parsed;
+      }
     } catch {}
     return null;
   }

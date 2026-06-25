@@ -42,12 +42,16 @@ export class CompetitorMonitorService {
           insights.push(insight);
           // Lưu alert nếu phát hiện giá đối thủ thấp hơn đáng kể
           if (insight.action && insight.action !== 'maintain') {
-            const diff = product.price - (insight.lowestCompetitorPrice || product.price);
+            const rawCp = insight.lowestCompetitorPrice;
+            const competitorPrice = typeof rawCp === 'number' && !isNaN(rawCp)
+              ? rawCp
+              : parseFloat(String(rawCp).replace(/[^0-9.]/g, '')) || product.price;
+            const diff = product.price - competitorPrice;
             const pct = product.price > 0 ? (diff / product.price) * 100 : 0;
             await this.alertRepo.save(this.alertRepo.create({
               productId: product.id,
               ourPrice: product.price,
-              competitorPrice: insight.lowestCompetitorPrice || product.price,
+              competitorPrice,
               competitorPlatform: insight.platform || 'unknown',
               priceDiffPercent: pct,
               suggestedAction: insight.action === 'lower_price' ? PriceAction.DECREASE : PriceAction.INCREASE,
