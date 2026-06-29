@@ -84,7 +84,7 @@ export class TelegramAgentService {
     enableOfflineQueue: false,
   });
   private readonly POSTED_KEY = 'posted:products';
-  private readonly POSTED_TTL = 48 * 3600; // 48 giờ
+  private readonly POSTED_TTL = 12 * 3600; // 12 giờ — sp có thể tái xuất hiện sáng và chiều
 
   private readonly AT_PID = process.env.ACCESSTRADE_PID || '';
   private readonly AT_AID = process.env.ACCESSTRADE_TIKI_AID || '';
@@ -192,11 +192,11 @@ export class TelegramAgentService {
         this.logger.warn('⚠️ AT deeplink chưa hoạt động → dùng link Tiki trực tiếp (chưa có hoa hồng). Vào accesstrade.vn join campaign TIKI CPS!');
       }
 
-      // Cào Tiki + Shopee song song
-      const half = Math.ceil(count / 2);
+      // Pool cố định 30 sp để luôn có đủ sp mới sau dedup (Tiki ~41 sp, 12h TTL)
+      const POOL_SIZE = 30;
       const [tikiProducts, shopeeProducts] = await Promise.all([
-        this.scrapeTikiProducts(half),
-        this.scrapeShopeeProducts(half),
+        this.scrapeTikiProducts(POOL_SIZE),
+        this.scrapeShopeeProducts(Math.ceil(count * 1.5)),
       ]);
 
       // Ưu tiên brand hoa hồng cao (40%) + Tiki/Shopee (60%)
@@ -233,9 +233,10 @@ export class TelegramAgentService {
         for (let k = 0; k < 3 && ti < tikiShopeeProducts.length; k++) rawProducts.push(tikiShopeeProducts[ti++]);
       }
 
-      // Lọc bỏ sản phẩm đã đăng trong 48h qua, rồi loại link 404
+      // Lọc bỏ sản phẩm đã đăng trong 48h qua, rồi loại link 404, cap tại count
       let products = await this.filterUnposted(rawProducts);
       products = await this.filterDeadLinks(products);
+      products = products.slice(0, count); // giới hạn đăng đúng count sp mỗi run
 
       this.logger.log(`Priority brands: ${priorityProducts.length} | Tiki: ${tikiProducts.length} | Shopee: ${shopeeProducts.length} → ${products.length} chưa đăng`);
 
@@ -388,12 +389,15 @@ export class TelegramAgentService {
       })
     );
 
-    // Sắp xếp giảm giá cao nhất lên đầu
-    highDiscountResults.sort((a, b) => (b.discount ?? 0) - (a.discount ?? 0));
     this.logger.log(`Tiki chính hãng giảm giá: ${highDiscountResults.length} sản phẩm`);
 
     if (highDiscountResults.length >= count) {
-      return highDiscountResults.slice(0, count);
+      // Xáo trong từng tier để mỗi run chọn sp khác nhau (không luôn top-N cố định)
+      const shuffle = <T>(arr: T[]) => arr.sort(() => Math.random() - 0.5);
+      const tier1 = shuffle(highDiscountResults.filter(p => (p.discount ?? 0) >= 40));
+      const tier2 = shuffle(highDiscountResults.filter(p => (p.discount ?? 0) >= 25 && (p.discount ?? 0) < 40));
+      const tier3 = shuffle(highDiscountResults.filter(p => (p.discount ?? 0) < 25));
+      return [...tier1, ...tier2, ...tier3].slice(0, count);
     }
 
     // Bước 2: Bổ sung từ top_seller nếu chưa đủ
