@@ -156,6 +156,29 @@ export class TelegramAgentService {
     } catch {}
   }
 
+  // Lọc bỏ link 404/410 trước khi đăng — chỉ loại explicit dead link, timeout → giữ lại
+  private async filterDeadLinks(products: ScrapedProduct[]): Promise<ScrapedProduct[]> {
+    if (!products.length) return [];
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept-Language': 'vi-VN,vi;q=0.9',
+    };
+    const checks = await Promise.allSettled(
+      products.map(p =>
+        axios.head(p.originalUrl, { timeout: 6000, maxRedirects: 5, validateStatus: () => true, headers })
+          .then(r => r.status !== 404 && r.status !== 410)
+          .catch(() => true), // timeout hoặc lỗi mạng → giữ lại để không bỏ nhầm
+      )
+    );
+    const valid = products.filter((_, i) => {
+      const r = checks[i];
+      return r.status === 'fulfilled' ? r.value : true;
+    });
+    const dead = products.length - valid.length;
+    this.logger.log(`Link check: ${products.length} sp → bỏ ${dead} link chết → ${valid.length} hợp lệ`);
+    return valid;
+  }
+
   // Gửi batch nội dung Facebook Groups về Telegram lúc 7h sáng
   @Cron('0 7 * * *')
   async runFacebookGroupsBatch() {
@@ -217,8 +240,9 @@ export class TelegramAgentService {
         for (let k = 0; k < 3 && ti < tikiShopeeProducts.length; k++) rawProducts.push(tikiShopeeProducts[ti++]);
       }
 
-      // Lọc bỏ sản phẩm đã đăng trong 48h qua
-      const products = await this.filterUnposted(rawProducts);
+      // Lọc bỏ sản phẩm đã đăng trong 48h qua, rồi loại link 404
+      let products = await this.filterUnposted(rawProducts);
+      products = await this.filterDeadLinks(products);
 
       this.logger.log(`Priority brands: ${priorityProducts.length} | Tiki: ${tikiProducts.length} | Shopee: ${shopeeProducts.length} → ${products.length} chưa đăng`);
 
