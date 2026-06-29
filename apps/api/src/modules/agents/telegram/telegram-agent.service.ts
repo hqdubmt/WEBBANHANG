@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import axios from 'axios';
+import Redis from 'ioredis';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const FormData = require('form-data');
 import { AgentLog, AgentName, AgentRunStatus } from '../../../database/entities/agent-log.entity';
@@ -75,6 +76,16 @@ const SHOPEE_CAT_MAP: Record<string, string> = {
 export class TelegramAgentService {
   private readonly logger = new Logger(TelegramAgentService.name);
 
+  private readonly redis = new Redis({
+    host: process.env.REDIS_HOST || '127.0.0.1',
+    port: Number(process.env.REDIS_PORT) || 6380,
+    password: process.env.REDIS_PASSWORD || undefined,
+    lazyConnect: true,
+    enableOfflineQueue: false,
+  });
+  private readonly POSTED_KEY = 'posted:products';
+  private readonly POSTED_TTL = 48 * 3600; // 48 giờ
+
   private readonly AT_PID = process.env.ACCESSTRADE_PID || '';
   private readonly AT_AID = process.env.ACCESSTRADE_TIKI_AID || '';
   private readonly AT_SHOPEE_AID = process.env.ACCESSTRADE_SHOPEE_AID || '';
@@ -115,6 +126,34 @@ export class TelegramAgentService {
   async runTikTokShopPromo() {
     this.logger.log('TikTok Shop promo...');
     await this.postTikTokShop();
+  }
+
+  // ─── Redis dedup helpers ───────────────────────────────────────────────────
+
+  private postedKey(url: string): string {
+    // Normalize URL: bỏ query string, chỉ giữ path
+    try { url = new URL(url).origin + new URL(url).pathname; } catch {}
+    return url.toLowerCase();
+  }
+
+  private async filterUnposted(products: ScrapedProduct[]): Promise<ScrapedProduct[]> {
+    if (!products.length) return [];
+    try {
+      const keys = products.map(p => this.postedKey(p.originalUrl));
+      const results = await Promise.all(keys.map(k => this.redis.get(`${this.POSTED_KEY}:${k}`)));
+      const filtered = products.filter((_, i) => !results[i]);
+      this.logger.log(`Dedup: ${products.length} sp → ${filtered.length} chưa đăng (bỏ ${products.length - filtered.length} trùng)`);
+      return filtered;
+    } catch {
+      return products; // Redis lỗi → không lọc, vẫn chạy bình thường
+    }
+  }
+
+  private async markPosted(url: string): Promise<void> {
+    try {
+      const key = `${this.POSTED_KEY}:${this.postedKey(url)}`;
+      await this.redis.set(key, '1', 'EX', this.POSTED_TTL);
+    } catch {}
   }
 
   // Gửi batch nội dung Facebook Groups về Telegram lúc 7h sáng
@@ -170,15 +209,18 @@ export class TelegramAgentService {
       }
 
       // Xen kẽ: 2 sp priority → 3 sp Tiki/Shopee → 2 sp priority → ...
-      const products: ScrapedProduct[] = [];
+      const rawProducts: ScrapedProduct[] = [];
       let pi = 0, ti = 0;
       while (pi < priorityProducts.length || ti < tikiShopeeProducts.length) {
-        if (pi < priorityProducts.length) products.push(priorityProducts[pi++]);
-        if (pi < priorityProducts.length) products.push(priorityProducts[pi++]);
-        for (let k = 0; k < 3 && ti < tikiShopeeProducts.length; k++) products.push(tikiShopeeProducts[ti++]);
+        if (pi < priorityProducts.length) rawProducts.push(priorityProducts[pi++]);
+        if (pi < priorityProducts.length) rawProducts.push(priorityProducts[pi++]);
+        for (let k = 0; k < 3 && ti < tikiShopeeProducts.length; k++) rawProducts.push(tikiShopeeProducts[ti++]);
       }
 
-      this.logger.log(`Priority brands: ${priorityProducts.length} | Tiki: ${tikiProducts.length} | Shopee: ${shopeeProducts.length} → ${products.length} tổng`);
+      // Lọc bỏ sản phẩm đã đăng trong 48h qua
+      const products = await this.filterUnposted(rawProducts);
+
+      this.logger.log(`Priority brands: ${priorityProducts.length} | Tiki: ${tikiProducts.length} | Shopee: ${shopeeProducts.length} → ${products.length} chưa đăng`);
 
       const results: Record<string, number> = {
         telegram: 0, discord: 0, zalo: 0, n8n: 0, facebook: 0,
@@ -195,10 +237,14 @@ export class TelegramAgentService {
           this.postMakeFacebook(p, i),
         ]);
 
+        const anySuccess = [tg, dc, zl, fb].some(r => r.status === 'fulfilled' && r.value);
         if (tg.status === 'fulfilled' && tg.value) results.telegram++;
         if (dc.status === 'fulfilled' && dc.value) results.discord++;
         if (zl.status === 'fulfilled' && zl.value) results.zalo++;
         if (fb.status === 'fulfilled' && fb.value) results.facebook++;
+
+        // Đánh dấu đã đăng để tránh lặp lại trong 48h
+        if (anySuccess) await this.markPosted(p.originalUrl);
 
         await new Promise(r => setTimeout(r, 1300));
       }
