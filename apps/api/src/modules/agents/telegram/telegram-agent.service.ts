@@ -114,13 +114,6 @@ export class TelegramAgentService {
     await this.scrapeAndDistribute(10);
   }
 
-  // Morning batch lớn hơn
-  @Cron('0 9 * * *')
-  async runMorningBatch() {
-    this.logger.log('Multi-Platform Agent: morning batch...');
-    await this.scrapeAndDistribute(30);
-  }
-
   // TikTok Shop promo — 11h và 19h mỗi ngày
   @Cron('0 11,19 * * *')
   async runTikTokShopPromo() {
