@@ -26,12 +26,9 @@ export class ContentFactoryService {
     private readonly logRepo: Repository<AgentLog>,
   ) {}
 
-  // Chạy mỗi giờ, tạo nội dung theo pipeline: Trend → AI Research → Generate → Review queue
-  @Cron('0 * * * *')
-  async runContentPipeline() {
-    this.logger.log('Content Factory: chạy pipeline...');
-    await this.executePipeline();
-  }
+  // Tắt: TelegramAgentService đã scrape live AT campaigns và đăng trực tiếp, không cần pipeline DB này
+  // @Cron('0 * * * *')
+  // async runContentPipeline() { ... }
 
   async executePipeline(plan?: ContentPlan[]): Promise<Content[]> {
     const log = this.logRepo.create({ agent: AgentName.CONTENT, status: AgentRunStatus.RUNNING });
@@ -46,7 +43,12 @@ export class ContentFactoryService {
     ];
 
     try {
-      const products = await this.productsService.getHotProducts(10);
+      const allProducts = await this.productsService.getHotProducts(30);
+      // Bỏ sản phẩm Tiki: ti.ki NXDOMAIN → deeplink v5 Tiki chết toàn bộ
+      const products = allProducts.filter(p => {
+        const link = p.affiliateLink || '';
+        return !link.includes('tiki.vn') && !link.includes('tiki%2');
+      });
       const created: Content[] = [];
 
       for (const planItem of defaultPlan) {

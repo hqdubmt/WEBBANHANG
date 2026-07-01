@@ -30,6 +30,8 @@ import { AutoDownrankService } from './auto-downrank.service';
 import { SelfRegulationService } from './self-regulation.service';
 import { EventCollectorService } from './event-collector.service';
 import { Public } from '../../auth/auth.guard';
+import { FanpageContentService } from './fanpage-content.service';
+import { FanpageReceptionService } from './fanpage-reception.service';
 
 @ApiTags('Agents - Telegram')
 @Controller('agents/telegram')
@@ -62,8 +64,11 @@ export class TelegramAgentController {
     private readonly autoDownrank: AutoDownrankService,
     private readonly selfRegulation: SelfRegulationService,
     private readonly eventCollector: EventCollectorService,
+    private readonly fanpageContent: FanpageContentService,
+    private readonly fanpageReception: FanpageReceptionService,
   ) {}
 
+  @Public()
   @Post('run')
   @ApiOperation({ summary: 'Chạy Telegram deals agent' })
   run() {
@@ -94,6 +99,74 @@ export class TelegramAgentController {
   @ApiOperation({ summary: 'Đăng bài lên Facebook Fanpage qua Make.com (có ảnh imgbb)' })
   postFacebook(@Query('count') count?: string) {
     return this.svc.scrapeAndDistribute(count ? parseInt(count) : 3);
+  }
+
+  @Get('fanpage/preview')
+  @ApiOperation({ summary: 'Xem trước nội dung deal + engagement sẽ đăng (không đăng thật)' })
+  fanpagePreview() {
+    const deal = this.fanpageContent.buildDealPost({
+      name: 'Kem Chống Nắng The Face Shop UV Mild Sun Cream SPF 50+',
+      price: 189000,
+      category: 'Làm đẹp',
+      brand: 'THEFACESHOP',
+      discount: 25,
+      affiliateLink: 'https://go.isclix.com/deep_link/v5/SAMPLE',
+    });
+    const engagement = this.fanpageContent.nextEngagementPost();
+    return { deal, engagement };
+  }
+
+  @Post('fanpage/engagement')
+  @ApiOperation({ summary: 'Đăng ngay 1 bài engagement lên Facebook Fanpage (poll/tips/relatable)' })
+  async fanpageEngagement() {
+    return this.svc.runFanpageEngagementPost();
+  }
+
+  @Post('fanpage/deal')
+  @ApiOperation({ summary: 'Đăng ngay 1 sản phẩm thật lên Facebook Fanpage với template mới' })
+  async fanpageDeal() {
+    return this.svc.scrapeAndDistribute(1);
+  }
+
+  @Post('fanpage/story')
+  @ApiOperation({ summary: 'Test đăng 1 Facebook Story (Tin) bằng ảnh URL' })
+  async fanpageStory(@Query('image') image?: string) {
+    const imageUrl = image || 'https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=1080&h=1920&fit=crop';
+    const ok = await this.svc.postFacebookStory(imageUrl);
+    return { success: ok };
+  }
+
+  // ─── Facebook Webhook (nhận comment/reaction từ fanpage) ────────────────────
+
+  @Public()
+  @Get('fb-webhook')
+  @ApiOperation({ summary: 'Facebook webhook verify (GET) — Facebook gọi để xác thực' })
+  fbWebhookVerify(
+    @Query('hub.mode') mode: string,
+    @Query('hub.verify_token') token: string,
+    @Query('hub.challenge') challenge: string,
+  ) {
+    const result = this.fanpageReception.verifyWebhook(mode, token, challenge);
+    if (result !== null) return parseInt(result, 10);
+    throw new UnauthorizedException('Invalid verify token');
+  }
+
+  @Public()
+  @Post('fb-webhook')
+  @ApiOperation({ summary: 'Facebook webhook events (POST) — nhận comment/reaction realtime' })
+  async fbWebhookEvent(@Body() body: any) {
+    await this.fanpageReception.handleWebhookEvent(body);
+    return { ok: true };
+  }
+
+  @Get('fanpage/engagement-stats')
+  @ApiOperation({ summary: 'Top bài có engagement cao nhất + thống kê auto-reply' })
+  async fanpageEngagementStats() {
+    const [topPosts, autoReplies] = await Promise.all([
+      this.fanpageReception.getTopPosts(10),
+      this.fanpageReception.getAutoReplyStats(),
+    ]);
+    return { topPosts, autoReplies };
   }
 
   @Post('tiktok-videos')
@@ -216,20 +289,13 @@ export class TelegramAgentController {
   }
 
   @Post('fb-groups/login')
-  @ApiOperation({ summary: 'Hướng dẫn lấy Facebook cookie để đăng nhập không cần API' })
+  @ApiOperation({ summary: 'Kích hoạt đăng nhập Facebook bằng FACEBOOK_EMAIL/FACEBOOK_PASSWORD trong .env' })
   async fbGroupsLogin() {
-    const token = process.env.TELEGRAM_BOT_TOKEN;
-    const chatId = process.env.TELEGRAM_CHANNEL_ID;
-    if (!token || !chatId) return { ok: false };
-    await this.fbGroups.loginWithPlaywright(token, chatId);
-    return { ok: true, message: 'Hướng dẫn đã gửi vào Telegram' };
-  }
-
-  @Post('fb-groups/set-cookie')
-  @ApiOperation({ summary: 'Set Facebook cookie string (từ browser DevTools)' })
-  async fbGroupsSetCookie(@Body() body: { cookie: string }) {
-    const ok = await this.fbGroups.setCookiesFromString(body.cookie);
-    return { ok, message: ok ? 'Đăng nhập Facebook thành công' : 'Cookie không hợp lệ' };
+    const email = process.env.FACEBOOK_EMAIL;
+    const password = process.env.FACEBOOK_PASSWORD;
+    if (!email || !password) return { ok: false, message: 'Chưa cấu hình FACEBOOK_EMAIL / FACEBOOK_PASSWORD trong .env' };
+    const ok = await this.fbGroups.loginWithCredentials(email, password);
+    return { ok, message: ok ? 'Đăng nhập Facebook thành công ✅' : 'Đăng nhập thất bại — kiểm tra email/password hoặc tắt 2FA' };
   }
 
   @Post('fb-groups/post')
@@ -245,11 +311,25 @@ export class TelegramAgentController {
     return { sent, groups: groupUrls.length };
   }
 
+  @Post('fb-groups/discover')
+  @ApiOperation({ summary: 'Tự động tìm Facebook Groups shopping VN và lưu Redis 7 ngày' })
+  async fbGroupsDiscover() {
+    return this.svc.runGroupDiscoveryNow();
+  }
+
   @Post('fb-groups/logout')
   @ApiOperation({ summary: 'Xoá session Facebook Groups' })
   fbGroupsLogout() {
     this.fbGroups.logout();
     return { ok: true };
+  }
+
+  // ─── Follower Growth ─────────────────────────────────────────────────────
+
+  @Post('follower-growth/run')
+  @ApiOperation({ summary: 'Kích hoạt thủ công: CTA post + invite likers + đăng groups' })
+  async runFollowerGrowth() {
+    return this.svc.runFollowerGrowthNow();
   }
 
   // ─── Optimization Layer ──────────────────────────────────────────────────

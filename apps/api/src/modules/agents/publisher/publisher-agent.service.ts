@@ -27,11 +27,9 @@ export class PublisherAgentService {
     private readonly contentRepo: Repository<Content>,
   ) {}
 
-  @Cron('0 8,12,18 * * *')
-  async runAutoPublish() {
-    this.logger.log('Publisher Agent: bắt đầu đăng bài tự động...');
-    await this.publishPendingContent();
-  }
+  // Tắt: TelegramAgentService đăng trực tiếp từ AT campaigns, không dùng DB draft queue
+  // @Cron('0 8,12,18 * * *')
+  // async runAutoPublish() { ... }
 
   async publishPendingContent(): Promise<PublishResult[]> {
     const log = this.logRepo.create({ agent: AgentName.PUBLISHER, status: AgentRunStatus.RUNNING });
@@ -48,6 +46,11 @@ export class PublisherAgentService {
       });
 
       for (const content of pending) {
+        // Bỏ qua content chứa Tiki link (ti.ki NXDOMAIN — deeplink v5 Tiki chết)
+        if (content.body?.includes('tiki.vn') || content.body?.includes('tiki%2')) {
+          await this.contentRepo.update(content.id, { status: 'cancelled' as any });
+          continue;
+        }
         // Đăng lên Telegram + Discord (Facebook yêu cầu Business Verification)
         const tgResult = await this.publishTelegram(content);
         const dcResult = await this.publishDiscord(content);

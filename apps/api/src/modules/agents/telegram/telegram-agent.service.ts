@@ -16,6 +16,9 @@ import { ContentVariantService } from './content-variant.service';
 import { RecycleService } from './recycle.service';
 import { KillSwitchService } from './kill-switch.service';
 import { SelfOptimizationEngineService } from './self-optimization-engine.service';
+import { FacebookGroupsService } from './facebook-groups.service';
+import { FanpageContentService } from './fanpage-content.service';
+import { FanpageReceptionService } from './fanpage-reception.service';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -25,9 +28,11 @@ interface ScrapedProduct {
   price: number;
   image: string;
   category: string;
+  brand?: string;
   affiliateLink: string;
   originalUrl: string;
   discount?: number;
+  trackerId?: string; // tracker ID để ghi nhận click theo kênh (tele/discord/fb)
 }
 
 const TIKI_CATEGORIES = [
@@ -86,12 +91,41 @@ export class TelegramAgentService {
   private readonly POSTED_KEY = 'posted:products';
   private readonly POSTED_TTL = 12 * 3600; // 12 giờ — sp có thể tái xuất hiện sáng và chiều
 
+  private readonly FB_GROUPS_KEY = 'fb:groups:discovered';
+  private readonly FB_GROUPS_TTL = 7 * 24 * 3600; // 7 ngày
+
+  private readonly GROUP_SEARCH_KEYWORDS = [
+    'mua sắm online việt nam',
+    'deal hàng giảm giá hôm nay',
+    'khuyến mãi tiki shopee',
+    'hội mua hàng giá tốt',
+    'hàng sale giảm giá mỗi ngày',
+    'mua bán online hà nội',
+    'mua bán online hồ chí minh',
+    'deal hot review sản phẩm',
+    'săn sale online việt nam',
+    'mua hàng tiki giảm giá',
+  ];
+
   private readonly AT_PID = process.env.ACCESSTRADE_PID || '';
-  private readonly AT_AID = process.env.ACCESSTRADE_TIKI_AID || '';
-  private readonly AT_SHOPEE_AID = process.env.ACCESSTRADE_SHOPEE_AID || '';
-  private readonly AT_CONCUNG_AID = process.env.ACCESSTRADE_CONCUNG_AID || '5204532880919025215';
-  private readonly AT_THEFACESHOP_AID = process.env.ACCESSTRADE_THEFACESHOP_AID || '4679977611385258995';
-  private readonly AT_HOANGHA_AID = process.env.ACCESSTRADE_HOANGHA_AID || '5229340396064683522';
+  private readonly AT_AID = process.env.ACCESSTRADE_CONCUNG_AID || ''; // dùng cho health-check
+  // URL pattern → AID — chỉ các chiến dịch approval=successful trên AT (verified 2026-07-01)
+  private readonly AT_URL_MAP: ReadonlyArray<[string, string]> = [
+    ['concung.com',        process.env.ACCESSTRADE_CONCUNG_AID || ''],
+    ['thefaceshop.com.vn', process.env.ACCESSTRADE_THEFACESHOP_AID || ''],
+    ['hoanghamobile.com',  process.env.ACCESSTRADE_HOANGHA_AID || ''],
+    ['cellphones.com.vn',  process.env.ACCESSTRADE_CELLPHONES_AID || ''],
+    ['lug.vn',             process.env.ACCESSTRADE_LUG_AID || ''],
+    ['vascara.com',        process.env.ACCESSTRADE_VASCARA_AID || ''],
+    ['juno.vn',            process.env.ACCESSTRADE_JUNO_AID || ''],
+    ['bestme.vn',          process.env.ACCESSTRADE_DHC_AID || ''],
+    ['pnj.com.vn',         process.env.ACCESSTRADE_PNJ_AID || ''],
+    ['fptshop.com.vn',     process.env.ACCESSTRADE_FPT_AID || ''],
+    ['shop.fpt.vn',        process.env.ACCESSTRADE_FPT_AID || ''],
+    ['tiktok.com',         process.env.ACCESSTRADE_TIKTOKSHOP_AID || ''],
+    ['vemaybay.vn',        process.env.ACCESSTRADE_VEMAYBAY_AID || ''],
+    ['shopee.vn',          process.env.ACCESSTRADE_SHOPEE_AID || ''],
+  ];
 
   constructor(
     @InjectRepository(AgentLog)
@@ -105,10 +139,14 @@ export class TelegramAgentService {
     private readonly recycleService: RecycleService,
     private readonly killSwitch: KillSwitchService,
     private readonly selfOpt: SelfOptimizationEngineService,
+    private readonly fbGroups: FacebookGroupsService,
+    private readonly fanpageContent: FanpageContentService,
+    private readonly fanpageReception: FanpageReceptionService,
   ) {}
 
   // Cào + đăng mỗi 2 giờ từ 8h-22h lên TẤT CẢ platform
-  @Cron('0 8,10,12,14,16,18,20,22 * * *')
+  // Peak times Việt Nam: nghỉ trưa (11:30, 13:00), tan làm (17:30), tối prime (20:00, 21:30)
+  @Cron('30 7,11,13,17,20,21 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async runDailyDeals() {
     this.logger.log('Multi-Platform Agent: cào + đăng deal...');
     await this.scrapeAndDistribute(10);
@@ -119,6 +157,56 @@ export class TelegramAgentService {
   async runTikTokShopPromo() {
     this.logger.log('TikTok Shop promo...');
     await this.postTikTokShop();
+  }
+
+  // Báo cáo CEO — chạy 6:30 sáng hàng ngày, gửi qua Telegram
+  @Cron('30 6 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  async runMorningRevenueReport() {
+    // Dùng offset +7h để lấy ngày VN (toISOString luôn UTC, không dùng được trực tiếp)
+    const vnNow = new Date(Date.now() + 7 * 3600 * 1000);
+    vnNow.setUTCDate(vnNow.getUTCDate() - 1);
+    const dateStr = vnNow.toISOString().split('T')[0];
+
+    const [daily, topBrands] = await Promise.all([
+      this.affiliateTracker.getDailyRevenueSummary(dateStr),
+      this.affiliateTracker.getAllTimeTopBrands(5),
+    ]);
+
+    const dailyTotal = Object.values(daily).reduce((a, b) => a + b, 0);
+    const dailyLines = Object.entries(daily)
+      .sort(([, a], [, b]) => b - a)
+      .map(([brand, rev]) => `  ${brand}: ${Math.round(rev / 1000)}k VND`)
+      .join('\n');
+
+    const topLines = topBrands
+      .map((b, i) => `  ${i + 1}. ${b.brand}: ${Math.round(b.revenue / 1000)}k (${b.posts} posts)`)
+      .join('\n');
+
+    const report = [
+      `📊 Báo cáo Affiliate CEO — ${dateStr}`,
+      `💰 EPC ước tính hôm qua: ${Math.round(dailyTotal / 1000)}k VND`,
+      dailyLines || '  (chưa có dữ liệu)',
+      '',
+      `🏆 Top brands tích lũy:`,
+      topLines || '  (chưa có dữ liệu)',
+    ].join('\n');
+
+    this.logger.log(report);
+
+    // Gửi lên Telegram channel
+    try {
+      const token = process.env.TELEGRAM_BOT_TOKEN;
+      const chatId = process.env.TELEGRAM_CHANNEL_ID;
+      if (token && chatId) {
+        await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+          chat_id: chatId,
+          text: report,
+          parse_mode: 'HTML',
+        });
+      }
+    } catch (e: any) {
+      this.logger.warn(`Không gửi được báo cáo sáng: ${e.message}`);
+    }
   }
 
   // ─── Redis dedup helpers ───────────────────────────────────────────────────
@@ -179,6 +267,48 @@ export class TelegramAgentService {
     await this.sendFacebookGroupsContent(5);
   }
 
+  // Đăng bài engagement (poll/tips/relatable) — 3×/tuần để xây follow
+  // Thứ 2/4/6 lúc 9h sáng — giờ reach cao, không xen với deal 8h
+  // Engagement post hàng ngày 9:30 sáng — xây follow bằng nội dung không bán hàng
+  @Cron('30 9 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  async runFanpageEngagementPost() {
+    const pageId    = process.env.FACEBOOK_PAGE_ID;
+    const pageToken = process.env.FACEBOOK_ACCESS_TOKEN;
+    const webhookUrl = process.env.MAKE_FACEBOOK_WEBHOOK;
+    if (!pageId && !webhookUrl) return;
+
+    const text = this.fanpageContent.nextEngagementPost();
+    this.logger.log(`Fanpage engagement post: ${text.split('\n')[0]}`);
+
+    if (pageId && pageToken) {
+      try {
+        await axios.post(`https://graph.facebook.com/v19.0/${pageId}/feed`, null, {
+          params: { message: text, access_token: pageToken },
+          timeout: 15000,
+        });
+        this.logger.log('Fanpage engagement post OK (Graph API)');
+        return;
+      } catch (e: any) {
+        this.logger.debug(`Fanpage engagement Graph API lỗi: ${e.response?.data?.error?.message || e.message}`);
+      }
+    }
+
+    if (webhookUrl) {
+      try {
+        await axios.post(webhookUrl, { message: text, type: 'engagement' }, { timeout: 10000 });
+        this.logger.log('Fanpage engagement post OK (webhook)');
+      } catch (e: any) {
+        this.logger.debug(`Fanpage engagement webhook lỗi: ${e.message}`);
+      }
+    }
+  }
+
+  // Poll engagement mỗi 35 phút — lấy likes/comments/shares của bài vừa đăng
+  @Cron('*/35 * * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  async runEngagementPoll() {
+    await this.fanpageReception.pollDueEngagements();
+  }
+
   async scrapeAndDistribute(count = 10): Promise<{ scraped: number; results: Record<string, number> }> {
     const log = this.logRepo.create({ agent: AgentName.TELEGRAM, status: AgentRunStatus.RUNNING });
     await this.logRepo.save(log);
@@ -189,80 +319,105 @@ export class TelegramAgentService {
       this.atWorking = null;
       const atOk = await this.checkATDeeplink();
       if (!atOk) {
-        this.logger.warn('⚠️ AT deeplink chưa hoạt động → dùng link Tiki trực tiếp (chưa có hoa hồng). Vào accesstrade.vn join campaign TIKI CPS!');
+        this.logger.warn('⚠️ AT deeplink chưa hoạt động → kiểm tra lại API key / PID tại accesstrade.vn');
       }
 
-      // Pool cố định 30 sp để luôn có đủ sp mới sau dedup (Tiki ~41 sp, 12h TTL)
-      const POOL_SIZE = 30;
-      const [tikiProducts, shopeeProducts] = await Promise.all([
-        this.scrapeTikiProducts(POOL_SIZE),
-        this.scrapeShopeeProducts(Math.ceil(count * 1.5)),
+      // Chỉ scrape Tiki để lấy sản phẩm giảm giá — link sẽ dùng AT deeplink của các brand đã được duyệt
+      // (Tiki CREATOR chưa được AT duyệt nên sp Tiki chỉ được đăng nếu trùng domain brand khác)
+      const [tikiProducts, concungProducts] = await Promise.all([
+        this.scrapeTikiProducts(Math.ceil(count * 3)),
+        this.scrapeConcungProducts(Math.ceil(count * 1.5)),
       ]);
 
-      // Ưu tiên brand hoa hồng cao (40%) + Tiki/Shopee (60%)
-      const priorityCount = Math.max(2, Math.floor(count * 0.4));
-      const priorityRaw = await this.priorityBrands.getProducts(priorityCount);
-      const priorityProducts: ScrapedProduct[] = priorityRaw.map(p => {
-        const aidMap: Record<string, string> = {
-          'concung.com': this.AT_CONCUNG_AID,
-          'thefaceshop.com.vn': this.AT_THEFACESHOP_AID,
-          'hoanghamobile.com': this.AT_HOANGHA_AID,
-        };
-        const domain = Object.keys(aidMap).find(d => p.url.includes(d)) || '';
-        const aid = aidMap[domain] || this.AT_AID;
-        const urlEnc = Buffer.from(p.url).toString('base64');
-        const affiliateLink = this.AT_PID && aid
-          ? `https://go.isclix.com/deep_link/v5/${this.AT_PID}/${aid}?sub4=tele&url_enc=${encodeURIComponent(urlEnc)}`
-          : p.url;
-        return { name: p.name, price: p.price, image: p.image, category: p.category, affiliateLink, originalUrl: p.url, discount: p.discount };
-      });
+      // Priority brands: chỉ lấy nếu có AT link hợp lệ (campaign được duyệt)
+      const priorityRaw = await this.priorityBrands.getProducts(count * 3);
+      const priorityProducts: ScrapedProduct[] = priorityRaw
+        .map(p => {
+          const affiliateLink = this.buildAffiliateLinkSmart(p.url, 'tele') ?? '';
+          if (!affiliateLink) {
+            this.logger.debug(`Priority brand chưa có campaign được duyệt: ${p.url.split('/')[2]}`);
+          }
+          return { name: p.name, price: p.price, image: p.image, category: p.category, brand: p.brand, affiliateLink: affiliateLink || p.url, originalUrl: p.url, discount: p.discount };
+        })
+        .filter(p => p.affiliateLink !== p.originalUrl);
 
-      const tikiShopeeProducts: ScrapedProduct[] = [];
-      const maxLen = Math.max(tikiProducts.length, shopeeProducts.length);
-      for (let i = 0; i < maxLen; i++) {
-        if (i < tikiProducts.length) tikiShopeeProducts.push(tikiProducts[i]);
-        if (i < shopeeProducts.length) tikiShopeeProducts.push(shopeeProducts[i]);
-      }
+      const rawProducts: ScrapedProduct[] = [...tikiProducts, ...concungProducts, ...priorityProducts];
 
-      // Xen kẽ: 2 sp priority → 3 sp Tiki/Shopee → 2 sp priority → ...
-      const rawProducts: ScrapedProduct[] = [];
-      let pi = 0, ti = 0;
-      while (pi < priorityProducts.length || ti < tikiShopeeProducts.length) {
-        if (pi < priorityProducts.length) rawProducts.push(priorityProducts[pi++]);
-        if (pi < priorityProducts.length) rawProducts.push(priorityProducts[pi++]);
-        for (let k = 0; k < 3 && ti < tikiShopeeProducts.length; k++) rawProducts.push(tikiShopeeProducts[ti++]);
-      }
-
-      // Lọc bỏ sản phẩm đã đăng trong 48h qua, rồi loại link 404, cap tại count
+      // Lọc bỏ sản phẩm đã đăng trong 48h qua, rồi loại link 404/link AT lỗi, cap tại count
       let products = await this.filterUnposted(rawProducts);
       products = await this.filterDeadLinks(products);
+      products = await this.filterInvalidAffiliateLinks(products); // luôn check AT link trước khi đăng
       products = products.slice(0, count); // giới hạn đăng đúng count sp mỗi run
 
-      this.logger.log(`Priority brands: ${priorityProducts.length} | Tiki: ${tikiProducts.length} | Shopee: ${shopeeProducts.length} → ${products.length} chưa đăng`);
+      // Register mỗi sản phẩm với tracker để click từ bất kỳ kênh nào đều được ghi nhận
+      for (const p of products) {
+        if (p.affiliateLink.includes('go.isclix.com')) {
+          p.trackerId = this.affiliateTracker.register(p.name, p.category, p.originalUrl, p.affiliateLink);
+        }
+      }
+
+      // CEO dashboard: log EPC ước tính của batch này trước khi đăng
+      const batchEPC = products.reduce((sum, p) => {
+        const epc = this.productScore.estimatedEPC({ brand: p.brand ?? 'Unknown', price: p.price, category: p.category });
+        return sum + epc;
+      }, 0);
+      this.logger.log(`Priority brands: ${priorityProducts.length} | Tiki: ${tikiProducts.length} | ConCung: ${concungProducts.length} → ${products.length} chưa đăng | EPC pool: ${Math.round(batchEPC / 1000)}k VND`);
 
       const results: Record<string, number> = {
-        telegram: 0, discord: 0, zalo: 0, n8n: 0, facebook: 0,
+        telegram: 0, discord: 0, zalo: 0, n8n: 0, facebook: 0, story: 0,
       };
 
       for (let i = 0; i < products.length; i++) {
         const p = products[i];
 
-        // Chạy song song tất cả platform
-        const [tg, dc, zl, fb] = await Promise.allSettled([
+        // Upload ảnh branded card một lần — dùng chung cho cả bài viết lẫn story
+        const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
+        const hook = HOOKS[i % HOOKS.length];
+        let sharedImageUrl: string | null = p.image || null;
+        try {
+          const imgBuf = await this.imgGen.generateProductCard({
+            name: p.name, price: pf, category: p.category,
+            imageUrl: p.image, hook, source: p.originalUrl.includes('shopee.vn') ? 'shopee' : 'tiki',
+          });
+          if (imgBuf) {
+            const hosted = await this.uploadToImgbb(imgBuf);
+            if (hosted) sharedImageUrl = hosted;
+          }
+        } catch { /* bỏ qua lỗi generate */ }
+
+        // Chạy song song tất cả platform, truyền ảnh đã upload thay vì generate lại
+        const [tg, dc, zl, story] = await Promise.allSettled([
           this.postTelegram(p, i),
           this.postDiscord(p, i),
           this.postZaloOA(p),
-          this.postMakeFacebook(p, i),
+          this.postFacebookStory(sharedImageUrl),
         ]);
+        // FB riêng để lấy postId → lưu mapping cho auto-reply comment
+        const fbPostId = await this.postMakeFacebookWithImage(p, i, sharedImageUrl);
+        if (fbPostId && !fbPostId.startsWith('webhook_')) {
+          const directLink =
+            (p.affiliateLink?.includes('go.isclix.com') ? p.affiliateLink : null)
+            ?? this.buildAffiliateLinkSmart(p.originalUrl, 'fb')
+            ?? p.originalUrl;
+          await this.fanpageReception.storePostProduct(fbPostId, {
+            name: p.name, link: directLink, affiliateLink: directLink,
+            category: p.category, trackerId: p.trackerId,
+          });
+        }
 
-        const anySuccess = [tg, dc, zl, fb].some(r => r.status === 'fulfilled' && r.value);
+        const anySuccess = [tg, dc, zl].some(r => r.status === 'fulfilled' && r.value) || !!fbPostId;
         if (tg.status === 'fulfilled' && tg.value) results.telegram++;
         if (dc.status === 'fulfilled' && dc.value) results.discord++;
         if (zl.status === 'fulfilled' && zl.value) results.zalo++;
-        if (fb.status === 'fulfilled' && fb.value) results.facebook++;
+        if (fbPostId) results.facebook++;
+        if (story.status === 'fulfilled' && story.value) results.story++;
 
-        // Đánh dấu đã đăng để tránh lặp lại trong 48h
-        if (anySuccess) await this.markPosted(p.originalUrl);
+        // Đánh dấu đã đăng + ghi revenue ước tính vào Redis
+        if (anySuccess) {
+          await this.markPosted(p.originalUrl);
+          const epc = this.productScore.estimatedEPC({ brand: p.brand ?? 'Unknown', price: p.price, category: p.category });
+          await this.affiliateTracker.recordRevenue(p.brand ?? 'Unknown', epc);
+        }
 
         await new Promise(r => setTimeout(r, 1300));
       }
@@ -312,25 +467,97 @@ export class TelegramAgentService {
 
   // ─── Tiki Scraper (không lưu DB) ─────────────────────────────────────────
 
+  // ─── Affiliate link pre-post verification ─────────────────────────────────
+
+  // Cache theo AID (tất cả link cùng AID hành xử giống nhau)
+  private readonly affiliateLinkCache = new Map<string, { ok: boolean; ts: number }>();
+  private readonly AFFILIATE_CACHE_TTL = 30 * 60 * 1000; // 30 phút
+
+  private async verifyAffiliateLink(link: string): Promise<boolean> {
+    if (!link.includes('go.isclix.com')) return false;
+    // Cache theo AID — tất cả link cùng AID đều cho kết quả giống nhau
+    const aidMatch = link.match(/deep_link\/v5\/[^/]+\/([^?]+)/);
+    const cacheKey = aidMatch ? aidMatch[1] : link;
+    const cached = this.affiliateLinkCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < this.AFFILIATE_CACHE_TTL) return cached.ok;
+
+    const set = (ok: boolean) => { this.affiliateLinkCache.set(cacheKey, { ok, ts: Date.now() }); return ok; };
+
+    try {
+      // Chỉ kiểm tra go.isclix.com phản hồi không lỗi — không follow redirect đến domain cuối
+      // vì AT có thể redirect qua ti.ki (NXDOMAIN) dù campaign vẫn hợp lệ
+      const res = await axios.get(link, {
+        maxRedirects: 2,
+        timeout: 10000,
+        validateStatus: s => s < 500,
+        headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36' },
+      });
+      return set(res.status < 400);
+    } catch (e: any) {
+      const status = e?.response?.status;
+      if ([301, 302, 307, 308].includes(status)) return set(true);
+      this.logger.warn(`AT link check lỗi: ${e.code ?? status}: AID …${cacheKey.slice(-8)}`);
+      return set(false);
+    }
+  }
+
+  // Kiểm tra affiliate link TRƯỚC KHI ĐĂNG — bỏ sản phẩm có link AT lỗi
+  private async filterInvalidAffiliateLinks(products: ScrapedProduct[]): Promise<ScrapedProduct[]> {
+    if (!products.length) return [];
+    const checks = await Promise.allSettled(
+      products.map(p => {
+        const link = p.affiliateLink?.includes('go.isclix.com')
+          ? p.affiliateLink
+          : (this.buildAffiliateLinkSmart(p.originalUrl, 'tele') ?? '');
+        return link ? this.verifyAffiliateLink(link) : Promise.resolve(false);
+      }),
+    );
+    const valid = products.filter((_, i) => {
+      const r = checks[i];
+      return r.status === 'fulfilled' && r.value;
+    });
+    const dropped = products.length - valid.length;
+    if (dropped > 0) this.logger.warn(`AT pre-check: bỏ ${dropped}/${products.length} sp link lỗi`);
+    else this.logger.log(`AT pre-check: tất cả ${valid.length} sp link hợp lệ ✅`);
+    return valid;
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+
   private atWorking: boolean | null = null;
 
   private async checkATDeeplink(): Promise<boolean> {
     if (this.atWorking !== null) return this.atWorking;
-    if (!this.AT_PID || !this.AT_AID) {
+    if (!this.AT_PID) {
       this.atWorking = false;
-      this.logger.warn('AT Deeplink: Thiếu PID/AID ❌');
+      this.logger.warn('AT Deeplink: Thiếu ACCESSTRADE_PID ❌');
       return false;
     }
-    // Test thực tế deeplink go.isclix.com
-    try {
-      const urlEnc = Buffer.from('https://tiki.vn/').toString('base64');
-      const testUrl = `https://go.isclix.com/deep_link/v5/${this.AT_PID}/${this.AT_AID}?sub4=check&url_enc=${encodeURIComponent(urlEnc)}`;
-      const res = await axios.get(testUrl, { maxRedirects: 3, timeout: 8000, validateStatus: () => true });
-      this.atWorking = res.status < 400;
-      this.logger.log(`AT Deeplink: ${this.atWorking ? 'OK ✅ (go.isclix.com)' : `❌ HTTP ${res.status} — dùng link trực tiếp`}`);
-    } catch {
+    // Dùng campaign đầu tiên đang active trong AT_URL_MAP để health-check
+    // (không dùng Tiki AID vì ti.ki NXDOMAIN — campaign đó đã chết)
+    const activeEntry = this.AT_URL_MAP.find(([, aid]) => aid);
+    if (!activeEntry) {
       this.atWorking = false;
-      this.logger.warn('AT Deeplink: Không kết nối được, dùng link trực tiếp');
+      this.logger.warn('AT Deeplink: Không có campaign nào được cấu hình AID ❌');
+      return false;
+    }
+    const [domain, aid] = activeEntry;
+    try {
+      const urlEnc = Buffer.from(`https://${domain}/`).toString('base64');
+      const testUrl = `https://go.isclix.com/deep_link/v5/${this.AT_PID}/${aid}?sub4=check&url_enc=${encodeURIComponent(urlEnc)}`;
+      const res = await axios.get(testUrl, { maxRedirects: 0, timeout: 8000, validateStatus: s => s >= 200 && s < 400 });
+      this.atWorking = true;
+      this.logger.log(`AT Deeplink OK ✅ — ${domain} → ${res.status} (PID: ${this.AT_PID})`);
+    } catch (e: any) {
+      // axios throws on redirect when maxRedirects:0 — 302 IS success
+      const status = e?.response?.status;
+      if (status === 301 || status === 302 || status === 307 || status === 308) {
+        this.atWorking = true;
+        this.logger.log(`AT Deeplink OK ✅ — ${domain} → ${status} redirect`);
+      } else {
+        this.atWorking = false;
+        this.logger.warn(`AT Deeplink ❌ — ${domain} ${status ? `HTTP ${status}` : e.message}`);
+      }
     }
     return this.atWorking;
   }
@@ -341,6 +568,21 @@ export class TelegramAgentService {
       return `https://go.isclix.com/deep_link/v5/${this.AT_PID}/${this.AT_AID}?sub4=${platform}&url_enc=${encodeURIComponent(urlEnc)}`;
     }
     return productUrl;
+  }
+
+  // Đổi sub4 trong link AT sang platform cụ thể (tele/fb/discord)
+  private atLinkForPlatform(atLink: string, platform: string): string {
+    return atLink.replace(/sub4=[^&]+/, `sub4=${platform}`);
+  }
+
+  // Tra campaign AID theo URL — trả null nếu không có campaign được duyệt
+  private buildAffiliateLinkSmart(productUrl: string, platform = 'tele'): string | null {
+    if (!this.AT_PID) return null;
+    const u = productUrl.toLowerCase();
+    const entry = this.AT_URL_MAP.find(([pattern, aid]) => aid && u.includes(pattern));
+    if (!entry) return null;
+    const urlEnc = Buffer.from(productUrl).toString('base64');
+    return `https://go.isclix.com/deep_link/v5/${this.AT_PID}/${entry[1]}?sub4=${platform}&url_enc=${encodeURIComponent(urlEnc)}`;
   }
 
   private async shorten(longUrl: string): Promise<string> {
@@ -358,14 +600,17 @@ export class TelegramAgentService {
       'Referer': 'https://tiki.vn', 'Accept': 'application/json',
     };
 
+    // sub4 sẽ được ghi đè theo platform khi post — dùng 'tele' làm default
     const toScraped = (p: any, catName: string): ScrapedProduct => {
       const productUrl = `https://tiki.vn/${p.url_key}.html`;
+      // Tiki.vn không có campaign được AT duyệt → affiliateLink = productUrl (sẽ bị lọc sau)
+      const affiliateLink = this.buildAffiliateLinkSmart(productUrl, 'tele') ?? productUrl;
       return {
         name: p.name || '',
         price: p.price,
         image: p.thumbnail_url || '',
         category: catName,
-        affiliateLink: productUrl,
+        affiliateLink,
         originalUrl: productUrl,
         discount: p.discount_rate ?? 0,
       };
@@ -433,21 +678,62 @@ export class TelegramAgentService {
 
   // ─── Shopee Scraper ───────────────────────────────────────────────────────
 
-  private buildShopeeAffiliateLink(productUrl: string): string {
-    if (this.AT_PID && this.AT_SHOPEE_AID) {
-      const urlEnc = Buffer.from(productUrl).toString('base64');
-      return `https://go.isclix.com/deep_link/v5/${this.AT_PID}/${this.AT_SHOPEE_AID}?sub4=tele&url_enc=${encodeURIComponent(urlEnc)}`;
+  private buildShopeeAffiliateLink(productUrl: string, platform = 'tele'): string {
+    return this.buildAffiliateLinkSmart(productUrl, platform) ?? productUrl;
+  }
+
+  // Cào sản phẩm giảm giá từ Con Cưng — dùng campaign CON CƯNG KOC CAMP 2026 đã được duyệt
+  private async scrapeConcungProducts(count: number): Promise<ScrapedProduct[]> {
+    const concungAid = process.env.ACCESSTRADE_CONCUNG_AID || '';
+    if (!this.AT_PID || !concungAid) return [];
+    try {
+      const res = await axios.get('https://api.concung.com/api/v5/products', {
+        params: { promotion: true, limit: count * 2, sort: 'discount_desc', status: 1 },
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Origin': 'https://concung.com' },
+        timeout: 10000,
+      });
+      const items: any[] = res.data?.data?.products || res.data?.products || [];
+      return items
+        .filter(p => p.price && p.sale_price && p.sale_price < p.price)
+        .slice(0, count)
+        .map(p => {
+          const productUrl = `https://concung.com/${p.slug || p.url || p.id}`;
+          const urlEnc = Buffer.from(productUrl).toString('base64');
+          const discount = Math.round((1 - p.sale_price / p.price) * 100);
+          return {
+            name: p.name || p.title || '',
+            price: p.sale_price,
+            image: p.image || p.thumbnail || '',
+            category: 'Mẹ & Bé',
+            brand: 'Con Cưng',
+            affiliateLink: `https://go.isclix.com/deep_link/v5/${this.AT_PID}/${concungAid}?sub4=tele&url_enc=${encodeURIComponent(urlEnc)}`,
+            originalUrl: productUrl,
+            discount,
+          };
+        });
+    } catch (e: any) {
+      this.logger.debug(`Con Cưng scrape lỗi: ${e.message}`);
+      return [];
     }
-    return productUrl;
   }
 
   private async scrapeShopeeProducts(count: number): Promise<ScrapedProduct[]> {
+    if (!this.AT_PID) {
+      this.logger.debug('Shopee: bỏ qua (chưa cấu hình ACCESSTRADE_PID)');
+      return [];
+    }
+
     const results: ScrapedProduct[] = [];
     const browserHeaders = {
       'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': 'application/json, text/plain, */*',
       'Accept-Language': 'vi-VN,vi;q=0.9',
       'Referer': 'https://shopee.vn/',
+    };
+
+    const buildShopeeLink = (url: string) => {
+      // Dùng smart routing — trả về null nếu không có campaign
+      return this.buildAffiliateLinkSmart(url, 'tele') ?? url;
     };
 
     // Tìm theo keyword + lấy theo category song song
@@ -467,7 +753,7 @@ export class TelegramAgentService {
             const price = Math.round(Number(p.price || p.price_min || 0) / 100000);
             if (price <= 0) return;
             const url = `https://shopee.vn/product/${p.shopid}/${p.itemid}`;
-            results.push({ name: p.name, price, image: p.image ? `https://down-vn.img.susercontent.com/file/${p.image}` : '', category: 'Shopee', affiliateLink: url, originalUrl: url });
+            results.push({ name: p.name, price, image: p.image ? `https://down-vn.img.susercontent.com/file/${p.image}` : '', category: 'Shopee', affiliateLink: buildShopeeLink(url), originalUrl: url });
           });
         } catch { /* bị block là bình thường */ }
       }),
@@ -484,24 +770,29 @@ export class TelegramAgentService {
             if (price <= 0) return;
             const url = `https://shopee.vn/product/${p.shopid}/${p.itemid}`;
             const cat = SHOPEE_CAT_MAP[catId] || 'Shopee';
-            results.push({ name: p.name, price, image: p.image ? `https://down-vn.img.susercontent.com/file/${p.image}` : '', category: cat, affiliateLink: url, originalUrl: url });
+            results.push({ name: p.name, price, image: p.image ? `https://down-vn.img.susercontent.com/file/${p.image}` : '', category: cat, affiliateLink: buildShopeeLink(url), originalUrl: url });
           });
         } catch { /* ignore */ }
       }),
     ]);
 
-    // Dedup
+    // Dedup + chỉ giữ sản phẩm có campaign AT được duyệt
     const seen = new Set<string>();
-    return results.filter(p => {
-      if (seen.has(p.originalUrl)) return false;
+    const withCommission: ScrapedProduct[] = [];
+    for (const p of results) {
+      if (seen.has(p.originalUrl)) continue;
       seen.add(p.originalUrl);
-      return true;
-    }).slice(0, count);
+      const link = this.buildAffiliateLinkSmart(p.originalUrl, 'tele');
+      if (!link) continue; // không có campaign → bỏ qua
+      withCommission.push({ ...p, affiliateLink: link });
+    }
+    this.logger.debug(`Shopee: ${withCommission.length}/${results.length} sản phẩm có campaign`);
+    return withCommission.slice(0, count);
   }
 
   // ─── Platform Publishers ──────────────────────────────────────────────────
 
-  private readonly CTA = '\n\n👥 Theo dõi kênh: t.me/banhang1';
+  private readonly CTA = '\n\n👥 Kênh Telegram: t.me/banhang1\n🏠 Fanpage FB: https://www.facebook.com/profile.php?id=1181780431684077';
 
   private escapeHtml(s: string): string {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -516,9 +807,10 @@ export class TelegramAgentService {
 
     const discountLine = (p.discount || 0) >= 20 ? `🔥 GIẢM ${p.discount}%\n` : '';
 
+    const htmlLink = link.replace(/&/g, '&amp;'); // required by Telegram HTML parser
     const markdown = `${hook}\n${discountLine}${emoji} *${p.name.slice(0, 80)}*\n\n💰 *${pf}*\n\n🔗 [Đặt hàng ngay](${link})\n\n#${tag} #${source} #deal${this.CTA}`;
     const plain    = `${hook}\n${discountLine}${emoji} ${p.name.slice(0, 80)}\n\n💰 ${pf}\n\n🔗 ${link}\n\n#${tag} #${source} #deal${this.CTA}`;
-    const html     = `${hook}\n${discountLine ? `<b>${this.escapeHtml(discountLine.trim())}</b>\n` : ''}${emoji} <b>${this.escapeHtml(p.name.slice(0, 80))}</b>\n\n💰 <b>${pf}</b>\n\n🔗 <a href="${link}">Đặt hàng ngay</a>\n\n#${tag} #${source} #deal${this.CTA}`;
+    const html     = `${hook}\n${discountLine ? `<b>${this.escapeHtml(discountLine.trim())}</b>\n` : ''}${emoji} <b>${this.escapeHtml(p.name.slice(0, 80))}</b>\n\n💰 <b>${pf}</b>\n\n🔗 <a href="${htmlLink}">Đặt hàng ngay</a>\n\n#${tag} #${source} #deal${this.CTA}`;
 
     return { markdown, plain, html };
   }
@@ -536,7 +828,10 @@ export class TelegramAgentService {
     if (chatIds.length === 0) return false;
 
     const isShopee = p.originalUrl.includes('shopee.vn');
-    const link = isShopee ? this.buildShopeeAffiliateLink(p.originalUrl) : this.buildAffiliateLink(p.originalUrl, 'tele');
+    const link =
+      (p.trackerId && this.affiliateTracker.buildTrackerUrl(p.trackerId, 'tele'))
+      ?? this.buildAffiliateLinkSmart(p.originalUrl, 'tele')
+      ?? p.originalUrl;
     const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
     const hook = HOOKS[index % HOOKS.length];
     const { html } = this.buildText(link, p, index);
@@ -605,8 +900,12 @@ export class TelegramAgentService {
     const emoji = Object.entries(CAT_EMOJI).find(([k]) => p.category.includes(k))?.[1] ?? '🛒';
     const hook = HOOKS[index % HOOKS.length];
     const isShopeeD = p.originalUrl.includes('shopee.vn');
-    const link = isShopeeD ? this.buildShopeeAffiliateLink(p.originalUrl) : this.buildAffiliateLink(p.originalUrl, 'discord');
-    const source = isShopeeD ? 'Shopee' : 'Tiki';
+    const link =
+      (p.trackerId && this.affiliateTracker.buildTrackerUrl(p.trackerId, 'discord'))
+      ?? (p.affiliateLink?.includes('go.isclix.com') ? this.atLinkForPlatform(p.affiliateLink, 'discord') : null)
+      ?? this.buildAffiliateLinkSmart(p.originalUrl, 'discord')
+      ?? p.originalUrl;
+    const source = isShopeeD ? 'Shopee' : (p.brand || p.category);
 
     // Tạo ảnh product card
     const imgBuffer = await this.imgGen.generateProductCard({
@@ -707,11 +1006,75 @@ export class TelegramAgentService {
         headers: form.getHeaders(),
         timeout: 15000,
       });
+      if (res.data?.error) {
+        this.logger.debug(`imgbb lỗi: ${res.data.error.message || JSON.stringify(res.data.error)}`);
+        return null;
+      }
       return res.data?.data?.display_url || res.data?.data?.url || null;
     } catch (e: any) {
-      this.logger.debug(`imgbb upload lỗi: ${e.message}`);
+      const msg = e.response?.data?.error?.message || e.message;
+      this.logger.debug(`imgbb upload lỗi: ${msg}`);
       return null;
     }
+  }
+
+  // Phiên bản nhận imageUrl đã upload sẵn — trả về fbPostId để theo dõi engagement
+  private async postMakeFacebookWithImage(p: ScrapedProduct, index: number, imageUrl: string | null): Promise<string | null> {
+    const pageId = process.env.FACEBOOK_PAGE_ID;
+    const pageToken = process.env.FACEBOOK_ACCESS_TOKEN;
+    const webhookUrl = process.env.MAKE_FACEBOOK_WEBHOOK;
+    if (!pageId && !webhookUrl) return null;
+
+    const isShopee = p.originalUrl.includes('shopee.vn');
+    // Luôn dùng direct AT link trong bài viết FB — tracker URL dạng IP:port bị FB filter
+    const link = (p.affiliateLink && p.affiliateLink.includes('go.isclix.com'))
+      ? p.affiliateLink
+      : (this.buildAffiliateLinkSmart(p.originalUrl, 'fb') ?? p.originalUrl);
+
+    const message = this.fanpageContent.buildDealPost({
+      name: p.name, price: p.price, category: p.category,
+      brand: p.brand, discount: p.discount, affiliateLink: link,
+    });
+    const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
+
+    if (pageId && pageToken) {
+      try {
+        let fbPostId: string | undefined;
+        if (imageUrl) {
+          const res = await axios.post(`https://graph.facebook.com/v19.0/${pageId}/photos`, null, {
+            params: { url: imageUrl, caption: message, access_token: pageToken, published: true },
+            timeout: 45000,
+          });
+          // FB trả về {id: "photo_id", post_id: "page_post_id"}
+          fbPostId = res.data?.post_id || `${pageId}_${res.data?.id}`;
+        } else {
+          const res = await axios.post(`https://graph.facebook.com/v19.0/${pageId}/feed`, null, {
+            params: { message, link, access_token: pageToken },
+            timeout: 15000,
+          });
+          fbPostId = res.data?.id;
+        }
+        this.logger.log(`Facebook Graph API OK: ${p.name.slice(0, 40)} → post_id=${fbPostId}`);
+        return fbPostId ?? `${pageId}_unknown_${Date.now()}`;
+      } catch (e: any) {
+        this.logger.debug(`Facebook Graph API lỗi: ${e.response?.data?.error?.message || e.message} → thử Make.com`);
+      }
+    }
+
+    if (webhookUrl) {
+      try {
+        await axios.post(webhookUrl, {
+          message, link, image_url: imageUrl || p.image || '',
+          title: p.name.slice(0, 200), price: pf, category: p.category,
+          source: isShopee ? 'Shopee' : (p.brand || p.category),
+        }, { timeout: 10000 });
+        this.logger.log(`Make.com Facebook OK: ${p.name.slice(0, 40)}`);
+        return `webhook_${Date.now()}`; // không có postId thật, dùng placeholder
+      } catch (e: any) {
+        this.logger.debug(`Make.com Facebook lỗi: ${e.response?.data || e.message}`);
+      }
+    }
+    return null;
   }
 
   private async postMakeFacebook(p: ScrapedProduct, index: number): Promise<boolean> {
@@ -720,63 +1083,62 @@ export class TelegramAgentService {
     const webhookUrl = process.env.MAKE_FACEBOOK_WEBHOOK;
     if (!pageId && !webhookUrl) return false;
 
-    const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
-    const emoji = Object.entries(CAT_EMOJI).find(([k]) => p.category.includes(k))?.[1] ?? '🛒';
-    const hook = HOOKS[index % HOOKS.length];
     const isShopee = p.originalUrl.includes('shopee.vn');
-    const link = isShopee
-      ? this.buildShopeeAffiliateLink(p.originalUrl)
-      : this.buildAffiliateLink(p.originalUrl, 'fb');
-    const tag = p.category.replace(/\s/g, '').replace(/[&\-\/]/g, '');
-    const source = isShopee ? 'Shopee' : 'Tiki';
+    // Đảm bảo link FB dùng sub4=fb (không lấy nguyên p.affiliateLink vì nó có sub4=tele)
+    const link =
+      (p.trackerId && this.affiliateTracker.buildTrackerUrl(p.trackerId, 'fb'))
+      ?? (p.affiliateLink?.includes('go.isclix.com') ? this.atLinkForPlatform(p.affiliateLink, 'fb') : null)
+      ?? this.buildAffiliateLinkSmart(p.originalUrl, 'fb')
+      ?? p.originalUrl;
 
-    const message = [
-      `${hook} ${emoji}`,
-      ``,
-      `${p.name.slice(0, 150)}`,
-      ``,
-      `💰 Giá: ${pf}`,
-      `🏷️ ${p.category} (${source})`,
-      ``,
-      `👉 Mua ngay: ${link}`,
-      ``,
-      `#deal #${tag} #${source.toLowerCase()} #muasam #khuyenmai`,
-      ``,
-      `📢 Theo dõi Telegram nhận deal sớm hơn: https://t.me/banhang1`,
-    ].join('\n');
+    // Dùng template fanpage phù hợp với category + brand thay vì format generic cũ
+    const message = this.fanpageContent.buildDealPost({
+      name: p.name,
+      price: p.price,
+      category: p.category,
+      brand: p.brand,
+      discount: p.discount,
+      affiliateLink: link,
+    });
 
     // Tạo card 1080x1080 → upload imgbb → lấy public URL
-    let imageUrl: string | null = null;
+    // Nếu imgbb bị rate-limit, fallback dùng ảnh gốc từ Tiki/Shopee CDN
+    const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
+    const hook = HOOKS[index % HOOKS.length];
+    let imageUrl: string | null = p.image || null; // fallback luôn sẵn có
     try {
       const imgBuf = await this.imgGen.generateProductCard({
         name: p.name, price: pf, category: p.category,
         imageUrl: p.image, hook, source: isShopee ? 'shopee' : 'tiki',
       });
-      if (imgBuf) imageUrl = await this.uploadToImgbb(imgBuf);
-    } catch { /* bỏ qua */ }
+      if (imgBuf) {
+        const hosted = await this.uploadToImgbb(imgBuf);
+        if (hosted) imageUrl = hosted; // dùng branded card nếu upload thành công
+      }
+    } catch { /* bỏ qua lỗi generate */ }
 
-    // Cách 1: Gọi thẳng Facebook Graph API (có ảnh branded)
+    // Cách 1: Gọi thẳng Facebook Graph API
     if (pageId && pageToken) {
       try {
         if (imageUrl) {
-          // POST ảnh kèm caption
+          // POST ảnh kèm caption (branded card hoặc ảnh gốc CDN)
           await axios.post(
             `https://graph.facebook.com/v19.0/${pageId}/photos`,
             null,
             {
               params: { url: imageUrl, caption: message, access_token: pageToken, published: true },
-              timeout: 15000,
+              timeout: 45000, // FB cần fetch ảnh từ imgbb → cần 30-40s, 15s không đủ
             },
           );
         } else {
-          // Fallback: text + link kèm ảnh gốc Tiki/Shopee
+          // Fallback: text-only + affiliate link preview
           await axios.post(
             `https://graph.facebook.com/v19.0/${pageId}/feed`,
             null,
             {
               params: {
                 message,
-                link: p.image || link,
+                link,
                 access_token: pageToken,
               },
               timeout: 15000,
@@ -800,7 +1162,7 @@ export class TelegramAgentService {
           title: p.name.slice(0, 200),
           price: pf,
           category: p.category,
-          source,
+          source: isShopee ? 'Shopee' : (p.brand || p.category),
         }, { timeout: 10000 });
         this.logger.log(`Make.com Facebook OK: ${p.name.slice(0, 40)}`);
         return true;
@@ -810,6 +1172,51 @@ export class TelegramAgentService {
     }
 
     return false;
+  }
+
+  // Tạo Facebook Story (Tin) — chạy song song với bài viết thường
+  // Flow: upload ảnh unpublished → lấy photo_id → tạo story
+  async postFacebookStory(imageUrl: string | null): Promise<boolean> {
+    const pageId    = process.env.FACEBOOK_PAGE_ID;
+    const pageToken = process.env.FACEBOOK_ACCESS_TOKEN;
+    if (!pageId || !pageToken || !imageUrl) return false;
+
+    try {
+      // Bước 1: Upload ảnh lên Facebook (published=false) → lấy photo_id
+      const uploadRes = await axios.post(
+        `https://graph.facebook.com/v19.0/${pageId}/photos`,
+        null,
+        {
+          params: {
+            url: imageUrl,
+            published: 'false',
+            temporary: 'true',
+            access_token: pageToken,
+          },
+          timeout: 30000,
+        },
+      );
+      const photoId: string = uploadRes.data?.id;
+      if (!photoId) throw new Error('Upload ảnh không trả về photo_id');
+
+      // Bước 2: Tạo Story từ photo_id
+      const storyRes = await axios.post(
+        `https://graph.facebook.com/v19.0/${pageId}/photo_stories`,
+        null,
+        {
+          params: { photo_id: photoId, access_token: pageToken },
+          timeout: 20000,
+        },
+      );
+
+      const storyId = storyRes.data?.post_id || storyRes.data?.id;
+      this.logger.log(`Facebook Story (Tin) OK ✅ → story_id=${storyId}`);
+      return true;
+    } catch (e: any) {
+      const err = e.response?.data?.error?.message || e.message;
+      this.logger.warn(`Facebook Story lỗi: ${err}`);
+      return false;
+    }
   }
 
   // ─── TikTok Shop Promo ────────────────────────────────────────────────────
@@ -914,7 +1321,7 @@ export class TelegramAgentService {
       const p = products[i];
       const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
       const emoji = Object.entries(CAT_EMOJI).find(([k]) => p.category.includes(k))?.[1] ?? '🛒';
-      const link = this.buildAffiliateLink(p.originalUrl, 'oneatweb');
+      const link = this.buildAffiliateLinkSmart(p.originalUrl, 'oneatweb') ?? p.originalUrl;
 
       // Facebook format: plain text, nhiều emoji, không markdown
       const fbPost = [
@@ -1021,7 +1428,7 @@ export class TelegramAgentService {
 
     const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
     const isShopee = p.originalUrl.includes('shopee.vn');
-    const link = isShopee ? this.buildShopeeAffiliateLink(p.originalUrl) : this.buildAffiliateLink(p.originalUrl, 'tele');
+    const link = this.buildAffiliateLinkSmart(p.originalUrl, 'tele') ?? p.originalUrl;
     const hook = HOOKS[index % HOOKS.length];
     const tag = p.category.replace(/\s/g, '').replace(/[&\-\/]/g, '');
     const caption = `${hook} 🎬\n\n${p.name.slice(0, 80)}\n\n💰 ${pf}\n\n👉 ${link}\n\n#${tag} #tiktokdeal #dealngon`;
@@ -1056,7 +1463,7 @@ export class TelegramAgentService {
 
     const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
     const isShopee = p.originalUrl.includes('shopee.vn');
-    const link = isShopee ? this.buildShopeeAffiliateLink(p.originalUrl) : this.buildAffiliateLink(p.originalUrl, 'discord');
+    const link = this.buildAffiliateLinkSmart(p.originalUrl, 'discord') ?? p.originalUrl;
     const hook = HOOKS[index % HOOKS.length];
 
     const embed = {
@@ -1123,16 +1530,16 @@ export class TelegramAgentService {
         const sp = scored[i];
         const isShopee = sp.url.includes('shopee.vn');
 
-        // 3. Build affiliate link gốc (AT deeplink)
-        const aidMap: Record<string, string> = {
-          'concung.com': this.AT_CONCUNG_AID,
-          'thefaceshop.com.vn': this.AT_THEFACESHOP_AID,
-          'hoanghamobile.com': this.AT_HOANGHA_AID,
-        };
-        const domain = Object.keys(aidMap).find(d => sp.url.includes(d)) || '';
-        const atAffiliateLink = isShopee
-          ? this.buildShopeeAffiliateLink(sp.url)
-          : (domain ? `https://go.isclix.com/deep_link/v5/${this.AT_PID}/${aidMap[domain]}?sub4=opt&url_enc=${encodeURIComponent(Buffer.from(sp.url).toString('base64'))}` : this.buildAffiliateLink(sp.url, 'opt'));
+        // 3. Build affiliate link — bỏ qua sản phẩm không có campaign hoặc link lỗi
+        const atAffiliateLink = this.buildAffiliateLinkSmart(sp.url, 'opt');
+        if (!atAffiliateLink) {
+          this.logger.debug(`Skip no-campaign: ${sp.url.split('/')[2]}`);
+          continue;
+        }
+        if (!await this.verifyAffiliateLink(atAffiliateLink)) {
+          this.logger.warn(`Skip AT link lỗi: ${sp.url.split('/')[2]}`);
+          continue;
+        }
 
         // 4. Đăng ký tracker → lấy /go/ URL
         const trackerId = this.affiliateTracker.register(sp.name, sp.category, sp.url, atAffiliateLink);
@@ -1154,27 +1561,24 @@ export class TelegramAgentService {
         const bestVariant = this.contentVariant.getBestVariant(trackerId) || variants[0];
         if (!bestVariant) continue;
 
-        // Build tracker URLs per source
-        const tgTrackerUrl = this.affiliateTracker.buildTrackerUrl(trackerId, 'tele');
-        const fbTrackerUrl = this.affiliateTracker.buildTrackerUrl(trackerId, 'fb');
-        const dcTrackerUrl = this.affiliateTracker.buildTrackerUrl(trackerId, 'discord');
+        // Tracker đã register ở bước trước — không cần gọi buildTrackerUrl ở đây
 
-        // 6. Publish với tracker URL thay vì direct affiliate link
+        // 6. Publish với link AccessTrade trực tiếp (luôn hoạt động từ mọi thiết bị)
         const p: ScrapedProduct = {
           name: sp.name,
           price: sp.price,
           image: sp.image,
           category: sp.category,
-          affiliateLink: tgTrackerUrl,
+          affiliateLink: atAffiliateLink,
           originalUrl: sp.url,
           discount: sp.discount,
         };
 
         const [tg, dc, zl, fb] = await Promise.allSettled([
-          this.postTelegramWithContent(p, bestVariant.fullText.replace(atAffiliateLink, tgTrackerUrl)),
-          this.postDiscordWithLink(p, dcTrackerUrl, i),
+          this.postTelegramWithContent(p, bestVariant.fullText),
+          this.postDiscordWithLink(p, atAffiliateLink, i),
           this.postZaloOA(p),
-          this.postMakeFacebookWithLink(p, fbTrackerUrl, i),
+          this.postMakeFacebookWithLink(p, atAffiliateLink, i),
         ]);
 
         if (tg.status === 'fulfilled' && tg.value) results.telegram++;
@@ -1190,7 +1594,7 @@ export class TelegramAgentService {
           trackerId,
           productName: sp.name,
           category: sp.category,
-          trackerUrl: tgTrackerUrl,
+          trackerUrl: atAffiliateLink,
           hookUsed: bestVariant.hook,
           platforms: Object.entries(results).filter(([, v]) => v > 0).map(([k]) => k),
           postedAt: new Date(),
@@ -1239,8 +1643,7 @@ export class TelegramAgentService {
       const nextVariant = variants[recycled % variants.length] || variants[0];
       if (!nextVariant) continue;
 
-      const tgTrackerUrl = this.affiliateTracker.buildTrackerUrl(candidate.trackerId, 'tele');
-      const recycleText = `♻️ *TOP DEAL TUẦN NÀY*\n\n${nextVariant.fullText.replace(product.affiliateLink, tgTrackerUrl)}`;
+      const recycleText = `♻️ *TOP DEAL TUẦN NÀY*\n\n${nextVariant.fullText}`;
 
       // Gửi lên Telegram
       const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -1368,6 +1771,229 @@ export class TelegramAgentService {
 
     this.logger.log(`Boost Cycle xong: ${boosted} sản phẩm`);
     return { boosted, results };
+  }
+
+  // ─── Follower Growth ─────────────────────────────────────────────────────
+
+  // Đăng bài CTA kêu gọi follow fanpage: T2, T4, T6 lúc 9h VN
+  @Cron('0 9 * * 1,3,5')
+  async runFollowerGrowthPost() {
+    this.logger.log('Follower Growth: đăng bài CTA...');
+    await this.postFollowerCTA();
+  }
+
+  // Refresh Facebook session để không bị đăng xuất (mỗi 6h)
+  @Cron('0 */6 * * *')
+  async runFbSessionRefresh() {
+    await this.fbGroups.refreshSession();
+  }
+
+  // Mời người đã like bài đăng → theo dõi trang (mỗi 6h)
+  @Cron('30 */6 * * *')
+  async runInvitePostLikers() {
+    await this.invitePostLikers();
+  }
+
+  // Auto-post deal vào Facebook Groups để kéo follower (mỗi 8h)
+  @Cron('0 */8 * * *')
+  async runFacebookGroupPost() {
+    await this.postToFacebookGroups();
+  }
+
+  // Tự động tìm group Facebook mới mỗi thứ 2 lúc 3h sáng VN
+  @Cron('0 3 * * 1')
+  async runGroupDiscovery() {
+    await this.discoverAndSaveGroups();
+  }
+
+  async runGroupDiscoveryNow(): Promise<{ found: number; groups: string[] }> {
+    const groups = await this.discoverAndSaveGroups();
+    return { found: groups.length, groups };
+  }
+
+  private async discoverAndSaveGroups(): Promise<string[]> {
+    const loggedIn = await this.fbGroups.ensureLoggedIn();
+    if (!loggedIn) {
+      this.logger.log('Group discovery: không thể đăng nhập Facebook — bỏ qua');
+      return [];
+    }
+    this.logger.log('Bắt đầu tự động tìm Facebook groups...');
+    const urls = await this.fbGroups.discoverGroupUrls(this.GROUP_SEARCH_KEYWORDS);
+    if (urls.length > 0) {
+      try {
+        await this.redis.set(this.FB_GROUPS_KEY, JSON.stringify(urls), 'EX', this.FB_GROUPS_TTL);
+        this.logger.log(`Đã lưu ${urls.length} group URLs vào Redis (TTL 7 ngày)`);
+      } catch (e: any) {
+        this.logger.warn(`Redis lưu groups lỗi: ${e.message}`);
+      }
+    }
+    return urls;
+  }
+
+  private async getGroupUrls(): Promise<string[]> {
+    // Ưu tiên env var nếu có cấu hình thủ công
+    const envUrls = (process.env.FACEBOOK_GROUP_URLS || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (envUrls.length > 0) return envUrls;
+    // Dùng danh sách tự động tìm từ Redis
+    try {
+      const stored = await this.redis.get(this.FB_GROUPS_KEY);
+      if (stored) {
+        const urls: string[] = JSON.parse(stored);
+        this.logger.log(`Groups từ Redis: ${urls.length} groups`);
+        return urls;
+      }
+    } catch {}
+    return [];
+  }
+
+  async runFollowerGrowthNow(): Promise<{ ctaPost: boolean; invited: number; groupsPosted: number }> {
+    const [cta, invite, group] = await Promise.allSettled([
+      this.postFollowerCTA().then(() => true).catch(() => false),
+      this.invitePostLikers(),
+      this.postToFacebookGroups(),
+    ]);
+    return {
+      ctaPost: cta.status === 'fulfilled' ? cta.value as boolean : false,
+      invited: invite.status === 'fulfilled' ? (invite.value as any).invited : 0,
+      groupsPosted: group.status === 'fulfilled' ? (group.value as any).posted : 0,
+    };
+  }
+
+  private async postFollowerCTA(): Promise<void> {
+    const pageId = process.env.FACEBOOK_PAGE_ID;
+    const pageToken = process.env.FACEBOOK_ACCESS_TOKEN;
+    if (!pageId || !pageToken) return;
+
+    const variants = [
+      {
+        hook: '🔔 BẠN ĐÃ THEO DÕI TRANG CHƯA?',
+        body: 'Mỗi ngày chúng tôi chia sẻ hàng chục deal HOT từ Tiki, Shopee — giảm đến 70%!\n\n✅ Nhấn "Theo dõi" để:\n• Nhận deal sớm nhất trước khi hết hàng\n• Không bỏ lỡ flash sale siêu hot\n• Tiết kiệm hàng triệu đồng mỗi tháng',
+      },
+      {
+        hook: '🎁 DEAL HOT MỖI NGÀY — MIỄN PHÍ 100%!',
+        body: 'Chúng tôi săn deal giúp bạn. Bạn chỉ cần:\n\n1️⃣ Nhấn THEO DÕI trang\n2️⃣ Bật thông báo 🔔\n3️⃣ Nhận deal hot và mua hàng giảm giá mỗi ngày!',
+      },
+      {
+        hook: '💰 TIẾT KIỆM MỖI NGÀY VỚI DEAL HOT!',
+        body: 'Hàng ngàn người đã theo dõi trang để nhận deal hot hàng ngày.\n\nBạn thì sao? 👇\n\n👉 Nhấn THEO DÕI ngay để không bỏ lỡ!\n📢 Chia sẻ cho bạn bè cùng tiết kiệm nhé!',
+      },
+    ];
+    const v = variants[Math.floor(Math.random() * variants.length)];
+    const message = `${v.hook}\n\n${v.body}\n\n#muasam #deal #tiki #shopee #khuyenmai #tietsiem`;
+
+    try {
+      await axios.post(
+        `https://graph.facebook.com/v19.0/${pageId}/feed`,
+        null,
+        { params: { message, access_token: pageToken }, timeout: 15000 },
+      );
+      this.logger.log('Follower CTA post OK ✅');
+    } catch (e: any) {
+      this.logger.debug(`Follower CTA lỗi: ${e.response?.data?.error?.message || e.message}`);
+    }
+  }
+
+  private async invitePostLikers(): Promise<{ invited: number; checked: number }> {
+    const pageId = process.env.FACEBOOK_PAGE_ID;
+    const pageToken = process.env.FACEBOOK_ACCESS_TOKEN;
+    if (!pageId || !pageToken) return { invited: 0, checked: 0 };
+
+    let invited = 0;
+    let checked = 0;
+    try {
+      // Lấy 5 bài đăng gần nhất
+      const postsRes = await axios.get(`https://graph.facebook.com/v19.0/${pageId}/posts`, {
+        params: { fields: 'id', limit: 5, access_token: pageToken },
+        timeout: 10000,
+      });
+      const posts: any[] = postsRes.data?.data || [];
+
+      for (const post of posts.slice(0, 3)) {
+        const likesRes = await axios.get(`https://graph.facebook.com/v19.0/${post.id}/likes`, {
+          params: { fields: 'id', limit: 50, access_token: pageToken },
+          timeout: 10000,
+        });
+        const likers: any[] = likesRes.data?.data || [];
+        checked += likers.length;
+
+        for (const liker of likers.slice(0, 25)) {
+          try {
+            // Thử mời qua Graph API (Facebook restrict — graceful fail)
+            await axios.post(
+              `https://graph.facebook.com/v19.0/${pageId}/subscriptions`,
+              null,
+              { params: { subscriber: liker.id, access_token: pageToken }, timeout: 5000 },
+            );
+            invited++;
+            await new Promise(r => setTimeout(r, 300));
+          } catch { /* đã follow hoặc API không hỗ trợ */ }
+        }
+      }
+    } catch (e: any) {
+      this.logger.debug(`Invite likers lỗi: ${e.message}`);
+    }
+
+    if (checked > 0) this.logger.log(`Invite likers: kiểm tra ${checked} → mời được ${invited}`);
+    return { invited, checked };
+  }
+
+  private async postToFacebookGroups(): Promise<{ posted: number; failed: number }> {
+    const groupUrls = await this.getGroupUrls();
+    if (groupUrls.length === 0) {
+      this.logger.log('FB Groups: chưa có group nào (env trống, Redis trống). Chạy discover trước.');
+      return { posted: 0, failed: 0 };
+    }
+
+    // Ưu tiên dùng Playwright (cookie session) nếu đã đăng nhập
+    if (this.fbGroups.isLoggedIn()) {
+      const products = await this.getProductsForPosting(2);
+      const sent = await this.fbGroups.postToGroups(products, groupUrls);
+      this.logger.log(`FB Groups (Playwright): ${sent}/${groupUrls.length} OK`);
+      return { posted: sent, failed: groupUrls.length - sent };
+    }
+
+    // Fallback: Graph API group post (cần page là admin group)
+    const pageToken = process.env.FACEBOOK_ACCESS_TOKEN;
+    if (!pageToken) return { posted: 0, failed: 0 };
+
+    const products = await this.scrapeTikiProducts(2);
+    if (!products.length) return { posted: 0, failed: 0 };
+    const p = products[0];
+    const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
+    const link = this.buildAffiliateLinkSmart(p.originalUrl, 'fbgroup') ?? p.originalUrl;
+    const tag = p.category.replace(/\s/g, '').replace(/[&\-\/]/g, '');
+    const message = [
+      `🔥 HOT DEAL | ${p.category.toUpperCase()}`,
+      ``,
+      `${p.name.slice(0, 100)}${(p.discount ?? 0) >= 20 ? ` (Giảm ${p.discount}%)` : ''}`,
+      ``,
+      `💰 Giá: ${pf}`,
+      `👉 Mua ngay: ${link}`,
+      ``,
+      `📢 Theo dõi trang để nhận deal hot mỗi ngày!`,
+      `#deal #${tag} #muasam #khuyenmai`,
+    ].join('\n');
+
+    let posted = 0;
+    let failed = 0;
+    for (const url of groupUrls) {
+      const match = url.match(/groups\/(\d+)/);
+      if (!match) { failed++; continue; }
+      try {
+        await axios.post(`https://graph.facebook.com/v19.0/${match[1]}/feed`, null, {
+          params: { message, access_token: pageToken },
+          timeout: 15000,
+        });
+        this.logger.log(`Group API OK: ${match[1]}`);
+        posted++;
+        await new Promise(r => setTimeout(r, 2000));
+      } catch (e: any) {
+        this.logger.debug(`Group ${match[1]} lỗi: ${e.response?.data?.error?.message || e.message}`);
+        failed++;
+      }
+    }
+    if (posted + failed > 0) this.logger.log(`FB Groups API: ${posted} OK, ${failed} lỗi`);
+    return { posted, failed };
   }
 
   async sendCustomerCareMessage(telegramId: string, message: string): Promise<boolean> {

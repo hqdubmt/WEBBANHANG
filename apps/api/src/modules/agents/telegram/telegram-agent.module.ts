@@ -12,6 +12,8 @@ import { FacebookGroupsService } from './facebook-groups.service';
 import { AiVideoPipelineService } from './ai-video-pipeline.service';
 import { AiModule } from '../../ai/ai.module';
 import { PriorityBrandsService } from './priority-brands.service';
+import { FanpageContentService } from './fanpage-content.service';
+import { FanpageReceptionService } from './fanpage-reception.service';
 import { ProductScoreService } from './product-score.service';
 import { HookAgentService } from './hook-agent.service';
 import { AffiliateTrackerService } from './affiliate-tracker.service';
@@ -418,6 +420,8 @@ const ALL_PROVIDERS = [
   FacebookGroupsService,
   AiVideoPipelineService,
   PriorityBrandsService,
+  FanpageContentService,
+  FanpageReceptionService,
   ...OPTIMIZATION_PROVIDERS,
   ...TIKTOK_ADS_PROVIDERS,
   ...REVENUE_AI_PROVIDERS,
