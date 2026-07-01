@@ -122,7 +122,7 @@ export class TelegramAgentService {
     // ── Công nghệ / Điện tử ───────────────────────────────────────────────────
     ['hoanghamobile.com',  process.env.ACCESSTRADE_HOANGHA_AID || ''],
     ['cellphones.com.vn',  process.env.ACCESSTRADE_CELLPHONES_AID || ''],
-    ['fptshop.com.vn',     process.env.ACCESSTRADE_FPT_AID || ''],
+    // fptshop.com.vn bị 500 từ AT gateway — AID 5435... chỉ hợp lệ cho shop.fpt.vn
     ['shop.fpt.vn',        process.env.ACCESSTRADE_FPT_AID || ''],
     // ── Giáo dục / Khoá học online ────────────────────────────────────────────
     ['unica.vn',           process.env.ACCESSTRADE_UNICA_AID || ''],

@@ -77,10 +77,10 @@ export class PriorityBrandsService {
     ]);
 
     // Tier 3 — điện thoại/tech: hoa hồng thấp nhưng tăng trust kênh
-    const [hhm, cells, fpt] = await Promise.allSettled([
+    // FPTShop (fptshop.com.vn) đã bị xóa: AID FPT chỉ hợp lệ cho shop.fpt.vn (FPT Telecom)
+    const [hhm, cells] = await Promise.allSettled([
       this.scrapeHoangHa(3),
       this.scrapeCellphones(2),
-      this.scrapeFPTShop(2),
     ]);
 
     // Tier 4 — khoá học online / telecom SIM (commission tốt, ít cạnh tranh)
@@ -96,7 +96,7 @@ export class PriorityBrandsService {
     const all = [
       ...g(tfs), ...g(bestme), ...cc,                    // Tier 1
       ...g(juno), ...g(lug),                             // Tier 2
-      ...g(hhm), ...g(cells), ...g(fpt),                 // Tier 3
+      ...g(hhm), ...g(cells),                             // Tier 3
       ...g(unica), ...g(gitiho), ...g(wintel),           // Tier 4
     ];
 
@@ -105,7 +105,7 @@ export class PriorityBrandsService {
       this.logger.log(
         `Priority brands | T1: TFS=${g(tfs).length} DHC=${g(bestme).length} CC=${cc.length} ` +
         `| T2: JUNO=${g(juno).length} LUG=${g(lug).length} ` +
-        `| T3: HHM=${g(hhm).length} CPS=${g(cells).length} FPT=${g(fpt).length} ` +
+        `| T3: HHM=${g(hhm).length} CPS=${g(cells).length} ` +
         `| T4: UNICA=${g(unica).length} GITIHO=${g(gitiho).length} WINTEL=${g(wintel).length} ` +
         `→ ${all.length} tổng`,
       );
