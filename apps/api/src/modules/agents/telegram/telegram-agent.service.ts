@@ -322,26 +322,21 @@ export class TelegramAgentService {
         this.logger.warn('⚠️ AT deeplink chưa hoạt động → kiểm tra lại API key / PID tại accesstrade.vn');
       }
 
-      // Chỉ scrape Tiki để lấy sản phẩm giảm giá — link sẽ dùng AT deeplink của các brand đã được duyệt
-      // (Tiki CREATOR chưa được AT duyệt nên sp Tiki chỉ được đăng nếu trùng domain brand khác)
-      const [tikiProducts, concungProducts] = await Promise.all([
-        this.scrapeTikiProducts(Math.ceil(count * 3)),
-        this.scrapeConcungProducts(Math.ceil(count * 1.5)),
-      ]);
-
-      // Priority brands: chỉ lấy nếu có AT link hợp lệ (campaign được duyệt)
+      // Chỉ lấy sản phẩm từ brand có AT campaign đã được duyệt — không scrape Tiki/Shopee (chưa approved)
       const priorityRaw = await this.priorityBrands.getProducts(count * 3);
       const priorityProducts: ScrapedProduct[] = priorityRaw
         .map(p => {
-          const affiliateLink = this.buildAffiliateLinkSmart(p.url, 'tele') ?? '';
+          const affiliateLink = this.buildAffiliateLinkSmart(p.url, 'tele');
           if (!affiliateLink) {
-            this.logger.debug(`Priority brand chưa có campaign được duyệt: ${p.url.split('/')[2]}`);
+            this.logger.debug(`Bỏ qua brand chưa có campaign AT: ${p.url.split('/')[2]}`);
           }
-          return { name: p.name, price: p.price, image: p.image, category: p.category, brand: p.brand, affiliateLink: affiliateLink || p.url, originalUrl: p.url, discount: p.discount };
+          return affiliateLink
+            ? { name: p.name, price: p.price, image: p.image, category: p.category, brand: p.brand, affiliateLink, originalUrl: p.url, discount: p.discount }
+            : null;
         })
-        .filter(p => p.affiliateLink !== p.originalUrl);
+        .filter((p): p is NonNullable<typeof p> => p !== null);
 
-      const rawProducts: ScrapedProduct[] = [...tikiProducts, ...concungProducts, ...priorityProducts];
+      const rawProducts: ScrapedProduct[] = [...priorityProducts];
 
       // Lọc bỏ sản phẩm đã đăng trong 48h qua, rồi loại link 404/link AT lỗi, cap tại count
       let products = await this.filterUnposted(rawProducts);
@@ -361,7 +356,7 @@ export class TelegramAgentService {
         const epc = this.productScore.estimatedEPC({ brand: p.brand ?? 'Unknown', price: p.price, category: p.category });
         return sum + epc;
       }, 0);
-      this.logger.log(`Priority brands: ${priorityProducts.length} | Tiki: ${tikiProducts.length} | ConCung: ${concungProducts.length} → ${products.length} chưa đăng | EPC pool: ${Math.round(batchEPC / 1000)}k VND`);
+      this.logger.log(`Brands có AT link: ${priorityProducts.length} sp → ${products.length} chưa đăng | EPC pool: ${Math.round(batchEPC / 1000)}k VND`);
 
       const results: Record<string, number> = {
         telegram: 0, discord: 0, zalo: 0, n8n: 0, facebook: 0, story: 0,
@@ -827,15 +822,18 @@ export class TelegramAgentService {
 
     if (chatIds.length === 0) return false;
 
-    const isShopee = p.originalUrl.includes('shopee.vn');
-    const link =
-      (p.trackerId && this.affiliateTracker.buildTrackerUrl(p.trackerId, 'tele'))
-      ?? this.buildAffiliateLinkSmart(p.originalUrl, 'tele')
-      ?? p.originalUrl;
+    // Luôn dùng AT link từ p.affiliateLink (đã được filterInvalidAffiliateLinks xác nhận)
+    // Chỉ rebuild nếu chưa có — không bao giờ fallback về originalUrl (không hoa hồng)
+    const link = p.affiliateLink?.includes('go.isclix.com')
+      ? this.atLinkForPlatform(p.affiliateLink, 'tele')
+      : this.buildAffiliateLinkSmart(p.originalUrl, 'tele');
+    if (!link) { this.logger.warn(`Skip Telegram: ${p.name.slice(0, 30)} — không có AT link`); return false; }
+
     const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
     const hook = HOOKS[index % HOOKS.length];
     const { html } = this.buildText(link, p, index);
 
+    const brandLabel = p.brand ?? (p.originalUrl.includes('shopee.vn') ? 'Shopee' : 'Brand');
     // Tạo ảnh product card
     const imgBuffer = await this.imgGen.generateProductCard({
       name: p.name,
@@ -843,7 +841,7 @@ export class TelegramAgentService {
       category: p.category,
       imageUrl: p.image,
       hook,
-      source: isShopee ? 'shopee' : 'tiki',
+      source: 'tiki' as const,
     });
 
     let anySuccess = false;
@@ -899,25 +897,23 @@ export class TelegramAgentService {
     const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
     const emoji = Object.entries(CAT_EMOJI).find(([k]) => p.category.includes(k))?.[1] ?? '🛒';
     const hook = HOOKS[index % HOOKS.length];
-    const isShopeeD = p.originalUrl.includes('shopee.vn');
-    const link =
-      (p.trackerId && this.affiliateTracker.buildTrackerUrl(p.trackerId, 'discord'))
-      ?? (p.affiliateLink?.includes('go.isclix.com') ? this.atLinkForPlatform(p.affiliateLink, 'discord') : null)
-      ?? this.buildAffiliateLinkSmart(p.originalUrl, 'discord')
-      ?? p.originalUrl;
-    const source = isShopeeD ? 'Shopee' : (p.brand || p.category);
+    const link = p.affiliateLink?.includes('go.isclix.com')
+      ? this.atLinkForPlatform(p.affiliateLink, 'discord')
+      : this.buildAffiliateLinkSmart(p.originalUrl, 'discord');
+    if (!link) { this.logger.warn(`Skip Discord: ${p.name.slice(0, 30)} — không có AT link`); return false; }
 
+    const source = p.brand || p.category;
     // Tạo ảnh product card
     const imgBuffer = await this.imgGen.generateProductCard({
       name: p.name, price: pf, category: p.category,
-      imageUrl: p.image, hook, source: isShopeeD ? 'shopee' : 'tiki',
+      imageUrl: p.image, hook, source: 'tiki' as const,
     });
 
     const embed = {
       title: `${hook} ${emoji} ${p.name.slice(0, 100)}`,
       description: `💰 **${pf}**\n\n🏷️ ${p.category}\n\n[Đặt hàng ngay →](${link})`,
       url: link,
-      color: isShopeeD ? 0xEE4D2D : 0xFF6B35,
+      color: 0xFF6B35,
       image: imgBuffer ? { url: 'attachment://deal.jpg' } : (p.image ? { url: p.image } : undefined),
       footer: { text: `👥 t.me/banhang1 | ${source} Affiliate Deal` },
     };
@@ -955,7 +951,7 @@ export class TelegramAgentService {
         cover: { photo_url: p.image || '', status: 'show' },
         body: [
           { type: 'text', content: `🔥 ${p.name}\n💰 Giá: ${pf}\n💸 Hoa hồng: 8%` },
-          { type: 'button', buttons: [{ title: 'Mua ngay tại Tiki', image_icon: '', type: 'oa.open.url', payload: { url: p.affiliateLink } }] },
+          { type: 'button', buttons: [{ title: `Mua ngay ${p.brand ? 'tại ' + p.brand : 'ngay'}`, image_icon: '', type: 'oa.open.url', payload: { url: p.affiliateLink } }] },
         ],
       }, {
         headers: { access_token: accessToken, 'Content-Type': 'application/json' },
@@ -1025,11 +1021,11 @@ export class TelegramAgentService {
     const webhookUrl = process.env.MAKE_FACEBOOK_WEBHOOK;
     if (!pageId && !webhookUrl) return null;
 
-    const isShopee = p.originalUrl.includes('shopee.vn');
     // Luôn dùng direct AT link trong bài viết FB — tracker URL dạng IP:port bị FB filter
-    const link = (p.affiliateLink && p.affiliateLink.includes('go.isclix.com'))
-      ? p.affiliateLink
-      : (this.buildAffiliateLinkSmart(p.originalUrl, 'fb') ?? p.originalUrl);
+    const link = p.affiliateLink?.includes('go.isclix.com')
+      ? this.atLinkForPlatform(p.affiliateLink, 'fb')
+      : this.buildAffiliateLinkSmart(p.originalUrl, 'fb');
+    if (!link) { this.logger.warn(`Skip Facebook: ${p.name.slice(0, 30)} — không có AT link`); return null; }
 
     const message = this.fanpageContent.buildDealPost({
       name: p.name, price: p.price, category: p.category,
@@ -1066,7 +1062,7 @@ export class TelegramAgentService {
         await axios.post(webhookUrl, {
           message, link, image_url: imageUrl || p.image || '',
           title: p.name.slice(0, 200), price: pf, category: p.category,
-          source: isShopee ? 'Shopee' : (p.brand || p.category),
+          source: p.brand || p.category,
         }, { timeout: 10000 });
         this.logger.log(`Make.com Facebook OK: ${p.name.slice(0, 40)}`);
         return `webhook_${Date.now()}`; // không có postId thật, dùng placeholder
