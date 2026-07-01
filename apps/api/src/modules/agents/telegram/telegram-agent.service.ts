@@ -394,11 +394,12 @@ export class TelegramAgentService {
         } catch { /* bỏ qua lỗi generate */ }
 
         // Chạy song song tất cả platform, truyền ảnh đã upload thay vì generate lại
+        // Story chỉ đăng 1 lần/run (sản phẩm đầu tiên) để tránh FB rate limit
         const [tg, dc, zl, story] = await Promise.allSettled([
           this.postTelegram(p, i),
           this.postDiscord(p, i),
           this.postZaloOA(p),
-          this.postFacebookStory(sharedImageUrl),
+          i === 0 ? this.postFacebookStory(sharedImageUrl) : Promise.resolve(false),
         ]);
         // FB riêng để lấy postId → lưu mapping cho auto-reply comment
         const fbPostId = await this.postMakeFacebookWithImage(p, i, sharedImageUrl);
