@@ -250,20 +250,30 @@ export class TelegramAgentService {
     } catch {}
   }
 
-  // Lọc bỏ link 404/410 trước khi đăng — chỉ loại explicit dead link, timeout → giữ lại
+  // Lọc bỏ link 404/410 trước khi đăng — dùng GET+stream để tránh 405 khi HEAD bị reject
   private async filterDeadLinks(products: ScrapedProduct[]): Promise<ScrapedProduct[]> {
     if (!products.length) return [];
     const headers = {
       'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept-Language': 'vi-VN,vi;q=0.9',
     };
-    const checks = await Promise.allSettled(
-      products.map(p =>
-        axios.head(p.originalUrl, { timeout: 6000, maxRedirects: 5, validateStatus: () => true, headers })
-          .then(r => r.status !== 404 && r.status !== 410)
-          .catch(() => true), // timeout hoặc lỗi mạng → giữ lại để không bỏ nhầm
-      )
-    );
+    const checkUrl = async (url: string): Promise<boolean> => {
+      try {
+        const res = await axios.get(url, {
+          timeout: 8000,
+          maxRedirects: 10,
+          validateStatus: () => true,
+          responseType: 'stream',
+          headers,
+        });
+        // Đóng stream ngay để không download body
+        try { res.data?.destroy?.(); } catch { /* ignore */ }
+        return res.status < 400;
+      } catch {
+        return true; // lỗi mạng / timeout → giữ lại, không bỏ nhầm
+      }
+    };
+    const checks = await Promise.allSettled(products.map(p => checkUrl(p.originalUrl)));
     const valid = products.filter((_, i) => {
       const r = checks[i];
       return r.status === 'fulfilled' ? r.value : true;
@@ -484,20 +494,46 @@ export class TelegramAgentService {
 
   private async verifyAffiliateLink(link: string): Promise<boolean> {
     if (!link.includes('go.isclix.com')) return false;
-    // Cache theo AID — tất cả link cùng AID đều cho kết quả giống nhau
-    const aidMatch = link.match(/deep_link\/v5\/[^/]+\/([^?]+)/);
-    const cacheKey = aidMatch ? aidMatch[1] : link;
+
+    // Cache theo URL đầy đủ (bao gồm url_enc) để mỗi link đích được kiểm tra riêng
+    const cacheKey = link;
     const cached = this.affiliateLinkCache.get(cacheKey);
     if (cached && Date.now() - cached.ts < this.AFFILIATE_CACHE_TTL) return cached.ok;
 
     const set = (ok: boolean) => { this.affiliateLinkCache.set(cacheKey, { ok, ts: Date.now() }); return ok; };
 
+    // Giải mã URL đích từ url_enc trong deeplink → kiểm tra trực tiếp
     try {
-      // Chỉ kiểm tra go.isclix.com phản hồi không lỗi — không follow redirect đến domain cuối
-      // vì AT có thể redirect qua ti.ki (NXDOMAIN) dù campaign vẫn hợp lệ
+      const urlEncMatch = link.match(/[?&]url_enc=([^&]+)/);
+      if (urlEncMatch) {
+        const destUrl = Buffer.from(
+          decodeURIComponent(urlEncMatch[1]), 'base64'
+        ).toString('utf8').split('?')[0]; // bỏ UTM params
+        if (destUrl.startsWith('http')) {
+          const res = await axios.get(destUrl, {
+            timeout: 8000,
+            maxRedirects: 10,
+            validateStatus: () => true,
+            responseType: 'stream',
+            headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36' },
+          });
+          try { res.data?.destroy?.(); } catch { /* ignore */ }
+          if (res.status >= 400) {
+            this.logger.warn(`AT link check: dest ${res.status}: ${destUrl.slice(-50)}`);
+            return set(false);
+          }
+          return set(true);
+        }
+      }
+    } catch (e: any) {
+      // Nếu không giải mã được hoặc lỗi mạng → fallback kiểm tra go.isclix.com
+    }
+
+    // Fallback: kiểm tra AT gateway có phản hồi không
+    try {
       const res = await axios.get(link, {
         maxRedirects: 2,
-        timeout: 10000,
+        timeout: 8000,
         validateStatus: s => s < 500,
         headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36' },
       });
@@ -505,7 +541,7 @@ export class TelegramAgentService {
     } catch (e: any) {
       const status = e?.response?.status;
       if ([301, 302, 307, 308].includes(status)) return set(true);
-      this.logger.warn(`AT link check lỗi: ${e.code ?? status}: AID …${cacheKey.slice(-8)}`);
+      this.logger.warn(`AT link check lỗi: ${e.code ?? status}: ${cacheKey.slice(-30)}`);
       return set(false);
     }
   }
