@@ -111,19 +111,32 @@ export class TelegramAgentService {
   private readonly AT_AID = process.env.ACCESSTRADE_CONCUNG_AID || ''; // dùng cho health-check
   // URL pattern → AID — chỉ các chiến dịch approval=successful trên AT (verified 2026-07-01)
   private readonly AT_URL_MAP: ReadonlyArray<[string, string]> = [
+    // ── Mẹ & Bé / Làm đẹp / Thời trang ──────────────────────────────────────
     ['concung.com',        process.env.ACCESSTRADE_CONCUNG_AID || ''],
     ['thefaceshop.com.vn', process.env.ACCESSTRADE_THEFACESHOP_AID || ''],
-    ['hoanghamobile.com',  process.env.ACCESSTRADE_HOANGHA_AID || ''],
-    ['cellphones.com.vn',  process.env.ACCESSTRADE_CELLPHONES_AID || ''],
-    ['lug.vn',             process.env.ACCESSTRADE_LUG_AID || ''],
+    ['bestme.vn',          process.env.ACCESSTRADE_DHC_AID || ''],
     ['vascara.com',        process.env.ACCESSTRADE_VASCARA_AID || ''],
     ['juno.vn',            process.env.ACCESSTRADE_JUNO_AID || ''],
-    ['bestme.vn',          process.env.ACCESSTRADE_DHC_AID || ''],
+    ['lug.vn',             process.env.ACCESSTRADE_LUG_AID || ''],
     ['pnj.com.vn',         process.env.ACCESSTRADE_PNJ_AID || ''],
+    // ── Công nghệ / Điện tử ───────────────────────────────────────────────────
+    ['hoanghamobile.com',  process.env.ACCESSTRADE_HOANGHA_AID || ''],
+    ['cellphones.com.vn',  process.env.ACCESSTRADE_CELLPHONES_AID || ''],
     ['fptshop.com.vn',     process.env.ACCESSTRADE_FPT_AID || ''],
     ['shop.fpt.vn',        process.env.ACCESSTRADE_FPT_AID || ''],
-    ['tiktok.com',         process.env.ACCESSTRADE_TIKTOKSHOP_AID || ''],
+    // ── Giáo dục / Khoá học online ────────────────────────────────────────────
+    ['unica.vn',           process.env.ACCESSTRADE_UNICA_AID || ''],
+    ['gitiho.com',         process.env.ACCESSTRADE_GITIHO_AID || ''],
+    ['ila.edu.vn',         process.env.ACCESSTRADE_ILA_AID || ''],
+    // ── Telecom / SIM ─────────────────────────────────────────────────────────
+    ['wintel.vn',          process.env.ACCESSTRADE_WINTEL_AID || ''],
+    // ── Du lịch / Vé ─────────────────────────────────────────────────────────
     ['vemaybay.vn',        process.env.ACCESSTRADE_VEMAYBAY_AID || ''],
+    // ── Thương mại quốc tế ────────────────────────────────────────────────────
+    ['alibaba.com',        process.env.ACCESSTRADE_ALIBABA_AID || ''],
+    ['lazada.com.my',      process.env.ACCESSTRADE_LAZADA_MY_AID || ''],
+    // ── Marketplace ───────────────────────────────────────────────────────────
+    ['tiktok.com',         process.env.ACCESSTRADE_TIKTOKSHOP_AID || ''],
     ['shopee.vn',          process.env.ACCESSTRADE_SHOPEE_AID || ''],
   ];
 

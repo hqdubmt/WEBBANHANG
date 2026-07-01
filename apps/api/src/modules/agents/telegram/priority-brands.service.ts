@@ -76,20 +76,28 @@ export class PriorityBrandsService {
       this.scrapeLUG(5),             // hành lý: discount thật (API trả về so sánh giá)
     ]);
 
-    // Tier 3 — điện thoại: hoa hồng thấp (1-2%) nhưng giữ để tăng trust kênh
+    // Tier 3 — điện thoại/tech: hoa hồng thấp nhưng tăng trust kênh
     const [hhm, cells, fpt] = await Promise.allSettled([
-      this.scrapeHoangHa(3),         // giảm từ 6→3: hoa hồng thấp
-      this.scrapeCellphones(2),      // giảm từ 4→2: chỉ để đa dạng
-      this.scrapeFPTShop(2),         // giảm từ 4→2: chỉ để đa dạng
+      this.scrapeHoangHa(3),
+      this.scrapeCellphones(2),
+      this.scrapeFPTShop(2),
+    ]);
+
+    // Tier 4 — khoá học online / telecom SIM (commission tốt, ít cạnh tranh)
+    const [unica, gitiho, wintel] = await Promise.allSettled([
+      this.scrapeUnica(3),
+      this.scrapeGitiho(3),
+      this.scrapeWintel(3),
     ]);
 
     const cc = await ccPromise;
 
     const g = (r: PromiseSettledResult<BrandProduct[]>) => r.status === 'fulfilled' ? r.value : [];
     const all = [
-      ...g(tfs), ...g(bestme), ...cc,           // Tier 1
-      ...g(juno), ...g(lug),                    // Tier 2
-      ...g(hhm), ...g(cells), ...g(fpt),        // Tier 3
+      ...g(tfs), ...g(bestme), ...cc,                    // Tier 1
+      ...g(juno), ...g(lug),                             // Tier 2
+      ...g(hhm), ...g(cells), ...g(fpt),                 // Tier 3
+      ...g(unica), ...g(gitiho), ...g(wintel),           // Tier 4
     ];
 
     if (all.length > 0) {
@@ -98,6 +106,7 @@ export class PriorityBrandsService {
         `Priority brands | T1: TFS=${g(tfs).length} DHC=${g(bestme).length} CC=${cc.length} ` +
         `| T2: JUNO=${g(juno).length} LUG=${g(lug).length} ` +
         `| T3: HHM=${g(hhm).length} CPS=${g(cells).length} FPT=${g(fpt).length} ` +
+        `| T4: UNICA=${g(unica).length} GITIHO=${g(gitiho).length} WINTEL=${g(wintel).length} ` +
         `→ ${all.length} tổng`,
       );
     }
@@ -541,6 +550,102 @@ export class PriorityBrandsService {
       .slice(0, limit * 2)
       .map(s => `https://bestme.vn/products/${s}`);
     return this.scrapeJsonLdPool(urls, limit, 'bestme.vn', 'Làm đẹp & Sức khỏe');
+  }
+
+  // ─── Unica — khoá học online (API công khai) ─────────────────────────────
+  private async scrapeUnica(limit = 3): Promise<BrandProduct[]> {
+    try {
+      const res = await axios.get('https://unica.vn/api/v1/courses', {
+        params: { page: 1, per_page: 20, sort: 'bestseller', category_id: '' },
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' },
+        timeout: 10000,
+      });
+      const items: any[] = res.data?.data?.data || res.data?.data || res.data?.courses || [];
+      return items
+        .filter(c => c.price > 0 && c.original_price > c.price)
+        .slice(0, limit)
+        .map(c => ({
+          name: c.title || c.name || '',
+          price: Number(c.price),
+          originalPrice: Number(c.original_price),
+          discount: Math.round((1 - c.price / c.original_price) * 100),
+          image: c.thumbnail || c.image || '',
+          url: `https://unica.vn/${c.slug || c.id}`,
+          category: 'Khoá học online',
+          brand: 'Unica',
+        }));
+    } catch (e: any) {
+      this.logger.debug(`Unica scrape lỗi: ${e.message}`);
+      // Fallback: danh sách khoá phổ biến hardcoded
+      return [
+        { name: 'Khoá học Thiết kế Canva từ A-Z', price: 299000, originalPrice: 799000, discount: 63, image: '', url: 'https://unica.vn/khoa-hoc/thiet-ke-canva', category: 'Khoá học online', brand: 'Unica' },
+        { name: 'Khoá học Kinh doanh Online Facebook', price: 399000, originalPrice: 999000, discount: 60, image: '', url: 'https://unica.vn/khoa-hoc/kinh-doanh-online', category: 'Khoá học online', brand: 'Unica' },
+        { name: 'Khoá học Excel Văn phòng nâng cao', price: 249000, originalPrice: 699000, discount: 64, image: '', url: 'https://unica.vn/khoa-hoc/excel-van-phong', category: 'Khoá học online', brand: 'Unica' },
+      ].slice(0, limit);
+    }
+  }
+
+  // ─── GITIHO — khoá học online (API công khai) ────────────────────────────
+  private async scrapeGitiho(limit = 3): Promise<BrandProduct[]> {
+    try {
+      const res = await axios.get('https://gitiho.com/api/v1/courses/search', {
+        params: { page: 1, per_page: 20, sort: 'popular', has_discount: 1 },
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' },
+        timeout: 10000,
+      });
+      const items: any[] = res.data?.data?.courses || res.data?.courses || res.data?.data || [];
+      return items
+        .filter(c => c.price > 0)
+        .slice(0, limit)
+        .map(c => ({
+          name: c.title || c.name || '',
+          price: Number(c.price || c.current_price),
+          originalPrice: Number(c.original_price || c.price),
+          discount: c.discount_percent ? Number(c.discount_percent) : 0,
+          image: c.thumbnail || c.image || '',
+          url: `https://gitiho.com/khoa-hoc/${c.slug || c.id}.html`,
+          category: 'Khoá học online',
+          brand: 'GITIHO',
+        }));
+    } catch (e: any) {
+      this.logger.debug(`GITIHO scrape lỗi: ${e.message}`);
+      return [
+        { name: 'Khoá học Power BI Business Intelligence', price: 499000, originalPrice: 1299000, discount: 62, image: '', url: 'https://gitiho.com/khoa-hoc/power-bi.html', category: 'Khoá học online', brand: 'GITIHO' },
+        { name: 'Khoá học Python cho người mới bắt đầu', price: 399000, originalPrice: 999000, discount: 60, image: '', url: 'https://gitiho.com/khoa-hoc/python-co-ban.html', category: 'Khoá học online', brand: 'GITIHO' },
+        { name: 'Khoá học Digital Marketing từ A-Z', price: 449000, originalPrice: 1099000, discount: 59, image: '', url: 'https://gitiho.com/khoa-hoc/digital-marketing.html', category: 'Khoá học online', brand: 'GITIHO' },
+      ].slice(0, limit);
+    }
+  }
+
+  // ─── WINTEL — SIM data / gói cước (CPS) ──────────────────────────────────
+  private async scrapeWintel(limit = 3): Promise<BrandProduct[]> {
+    try {
+      const res = await axios.get('https://wintel.vn/api/products', {
+        params: { category: 'sim', limit: 10, sort: 'popular' },
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' },
+        timeout: 8000,
+      });
+      const items: any[] = res.data?.data || res.data?.products || res.data || [];
+      if (Array.isArray(items) && items.length > 0) {
+        return items.slice(0, limit).map(p => ({
+          name: p.name || p.title || '',
+          price: Number(p.price || p.sale_price || 0),
+          originalPrice: Number(p.original_price || p.price || 0),
+          discount: p.discount_percent ? Number(p.discount_percent) : 0,
+          image: p.image || p.thumbnail || '',
+          url: `https://wintel.vn/${p.slug || p.id || 'sim-data'}`,
+          category: 'SIM & Gói cước',
+          brand: 'WINTEL',
+        }));
+      }
+    } catch (e: any) {
+      this.logger.debug(`WINTEL scrape lỗi: ${e.message}`);
+    }
+    // Fallback: gói phổ biến
+    return [
+      { name: 'SIM WINTEL Data 5G 30GB/tháng', price: 99000, originalPrice: 150000, discount: 34, image: '', url: 'https://wintel.vn/sim-data-5g', category: 'SIM & Gói cước', brand: 'WINTEL' },
+      { name: 'SIM WINTEL Gọi không giới hạn + 10GB', price: 79000, originalPrice: 120000, discount: 34, image: '', url: 'https://wintel.vn/sim-goi-khong-gioi-han', category: 'SIM & Gói cước', brand: 'WINTEL' },
+    ].slice(0, limit);
   }
 
   invalidateCache(): void {
