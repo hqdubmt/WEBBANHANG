@@ -1351,7 +1351,17 @@ export class TelegramAgentService {
     const chatId = process.env.TELEGRAM_CHANNEL_ID;
     if (!token || !chatId) return { sent: 0 };
 
-    const products = await this.scrapeTikiProducts(count);
+    // Dùng priority brands (có AT link) thay vì Tiki (không có campaign được duyệt)
+    const rawBrands = await this.priorityBrands.getProducts(count * 2);
+    const products: ScrapedProduct[] = rawBrands
+      .map(p => {
+        const affiliateLink = this.buildAffiliateLinkSmart(p.url, 'fb');
+        return affiliateLink
+          ? { name: p.name, price: p.price, image: p.image, category: p.category, brand: p.brand, affiliateLink, originalUrl: p.url, discount: p.discount }
+          : null;
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null)
+      .slice(0, count);
     if (products.length === 0) return { sent: 0 };
 
     // Gửi header
@@ -1367,7 +1377,9 @@ export class TelegramAgentService {
       const p = products[i];
       const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
       const emoji = Object.entries(CAT_EMOJI).find(([k]) => p.category.includes(k))?.[1] ?? '🛒';
-      const link = this.buildAffiliateLinkSmart(p.originalUrl, 'oneatweb') ?? p.originalUrl;
+      const link = p.affiliateLink?.includes('go.isclix.com')
+        ? this.atLinkForPlatform(p.affiliateLink, 'fb')
+        : (this.buildAffiliateLinkSmart(p.originalUrl, 'fb') ?? p.originalUrl);
 
       // Facebook format: plain text, nhiều emoji, không markdown
       const fbPost = [
@@ -1417,7 +1429,17 @@ export class TelegramAgentService {
   }
 
   async generateTikTokBatch(count = 3): Promise<{ generated: number; telegramSent: number; discordSent: number; savedPaths: string[] }> {
-    const products = await this.scrapeTikiProducts(count);
+    // Dùng priority brands (có AT commission link) thay vì Tiki
+    const rawBrands = await this.priorityBrands.getProducts(count * 2);
+    const products: ScrapedProduct[] = rawBrands
+      .map(p => {
+        const affiliateLink = this.buildAffiliateLinkSmart(p.url, 'tele');
+        return affiliateLink
+          ? { name: p.name, price: p.price, image: p.image, category: p.category, brand: p.brand, affiliateLink, originalUrl: p.url, discount: p.discount }
+          : null;
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null)
+      .slice(0, count);
     const results = { generated: 0, telegramSent: 0, discordSent: 0, savedPaths: [] as string[] };
 
     for (let i = 0; i < products.length; i++) {
@@ -1429,7 +1451,7 @@ export class TelegramAgentService {
           category: p.category,
           imageUrl: p.image,
           hook: HOOKS[i % HOOKS.length],
-          source: p.originalUrl.includes('shopee.vn') ? 'shopee' : 'tiki',
+          source: 'tiki' as const,
         });
 
         if (!videoBuf) continue;
