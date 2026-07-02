@@ -552,69 +552,97 @@ export class PriorityBrandsService {
     return this.scrapeJsonLdPool(urls, limit, 'bestme.vn', 'Làm đẹp & Sức khỏe');
   }
 
-  // ─── Unica — khoá học online (API công khai) ─────────────────────────────
+  // ─── Unica — khoá học online (scrape sitemap → HTML) ────────────────────
   private async scrapeUnica(limit = 3): Promise<BrandProduct[]> {
+    // Fallback URLs lấy từ sitemap (đã verify hoạt động 2026-07-02)
+    const FALLBACK_URLS = [
+      'https://unica.vn/photoshop-2026-tu-a-z-co-ban-den-nang-cao',
+      'https://unica.vn/excel-ai-trong-phan-tich-du-lieu-doanh-nghiep-2026',
+      'https://unica.vn/chatgpt-thuc-chien-bien-ai-thanh-co-may-in-tien',
+      'https://unica.vn/ung-dung-sql-python-power-bi-ai-trong-phan-tich-du-lieu',
+      'https://unica.vn/python-ai-cho-phan-tich-du-lieu-tai-chinh-ke-toan-2026',
+      'https://unica.vn/san-xuat-video-marketing',
+      'https://unica.vn/ky-nang-thuyet-trinh-thuyet-phuc-trong-kinh-doanh',
+      'https://unica.vn/vibe-coding-tao-LandingPage-Web-App-voi-ai-chi-vai-phut',
+      'https://unica.vn/tu-duy-chien-luoc-danh-cho-nha-lanh-dao',
+      'https://unica.vn/ung-dung-ai-cho-hanh-chinh-nhan-su',
+    ];
+    let pool = FALLBACK_URLS;
     try {
-      const res = await axios.get('https://unica.vn/api/v1/courses', {
-        params: { page: 1, per_page: 20, sort: 'bestseller', category_id: '' },
-        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' },
-        timeout: 10000,
+      const sitemap = await axios.get('https://unica.vn/sitemap/course_0.xml', {
+        headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 8000,
       });
-      const items: any[] = res.data?.data?.data || res.data?.data || res.data?.courses || [];
-      return items
-        .filter(c => c.price > 0 && c.original_price > c.price)
-        .slice(0, limit)
-        .map(c => ({
-          name: c.title || c.name || '',
-          price: Number(c.price),
-          originalPrice: Number(c.original_price),
-          discount: Math.round((1 - c.price / c.original_price) * 100),
-          image: c.thumbnail || c.image || '',
-          url: `https://unica.vn/${c.slug || c.id}`,
-          category: 'Khoá học online',
-          brand: 'Unica',
-        }));
-    } catch (e: any) {
-      this.logger.debug(`Unica scrape lỗi: ${e.message}`);
-      // Fallback: danh sách khoá phổ biến hardcoded
-      return [
-        { name: 'Khoá học Thiết kế Canva từ A-Z', price: 299000, originalPrice: 799000, discount: 63, image: '', url: 'https://unica.vn/khoa-hoc/thiet-ke-canva', category: 'Khoá học online', brand: 'Unica' },
-        { name: 'Khoá học Kinh doanh Online Facebook', price: 399000, originalPrice: 999000, discount: 60, image: '', url: 'https://unica.vn/khoa-hoc/kinh-doanh-online', category: 'Khoá học online', brand: 'Unica' },
-        { name: 'Khoá học Excel Văn phòng nâng cao', price: 249000, originalPrice: 699000, discount: 64, image: '', url: 'https://unica.vn/khoa-hoc/excel-van-phong', category: 'Khoá học online', brand: 'Unica' },
-      ].slice(0, limit);
+      const found = [...(sitemap.data as string).matchAll(/https:\/\/unica\.vn\/([a-z0-9-]+)/g)]
+        .map(m => `https://unica.vn/${m[1]}`)
+        .filter(u => !u.includes('ebook') && !u.includes('sitemap'));
+      if (found.length > 5) pool = found;
+    } catch { /* dùng fallback */ }
+
+    const shuffled = [...pool].sort(() => Math.random() - 0.5);
+    const results: BrandProduct[] = [];
+    for (const url of shuffled) {
+      if (results.length >= limit) break;
+      try {
+        const res = await axios.get(url, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+          timeout: 12000,
+        });
+        const html: string = res.data;
+        const title = (html.match(/<title>([^<]+)<\/title>/) || [])[1]?.replace(' - Unica', '').trim();
+        if (!title) continue;
+        // Lấy tất cả số giá trong trang, sắp xếp từ nhỏ đến lớn
+        const priceNums = [...html.matchAll(/([0-9]{2,3}(?:\.[0-9]{3})+)/g)]
+          .map(m => Number(m[1].replace(/\./g, '')))
+          .filter(n => n >= 50000 && n <= 5000000);
+        if (priceNums.length === 0) continue;
+        priceNums.sort((a, b) => a - b);
+        const price = priceNums[0];            // giá thấp nhất = giá sale
+        const originalPrice = priceNums[priceNums.length - 1]; // giá cao nhất = giá gốc
+        const discount = originalPrice > price ? Math.round((1 - price / originalPrice) * 100) : 0;
+        // Lấy ảnh thumbnail
+        const imgMatch = html.match(/og:image[^>]+content="([^"]+)"/) || html.match(/<img[^>]+class="[^"]*(?:thumbnail|banner|cover)[^"]*"[^>]+src="([^"]+)"/i);
+        const image = imgMatch?.[1] || '';
+        results.push({ name: title, price, originalPrice: originalPrice > price ? originalPrice : undefined, discount, image, url, category: 'Khoá học online', brand: 'Unica' });
+        await new Promise(r => setTimeout(r, 500));
+      } catch { /* skip */ }
     }
+    this.logger.log(`Unica: ${results.length} sản phẩm`);
+    return results;
   }
 
-  // ─── GITIHO — khoá học online (API công khai) ────────────────────────────
+  // ─── GITIHO — khoá học online (hardcoded với URL thực, giá tải JS-only) ──
   private async scrapeGitiho(limit = 3): Promise<BrandProduct[]> {
-    try {
-      const res = await axios.get('https://gitiho.com/api/v1/courses/search', {
-        params: { page: 1, per_page: 20, sort: 'popular', has_discount: 1 },
-        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' },
-        timeout: 10000,
-      });
-      const items: any[] = res.data?.data?.courses || res.data?.courses || res.data?.data || [];
-      return items
-        .filter(c => c.price > 0)
-        .slice(0, limit)
-        .map(c => ({
-          name: c.title || c.name || '',
-          price: Number(c.price || c.current_price),
-          originalPrice: Number(c.original_price || c.price),
-          discount: c.discount_percent ? Number(c.discount_percent) : 0,
-          image: c.thumbnail || c.image || '',
-          url: `https://gitiho.com/khoa-hoc/${c.slug || c.id}.html`,
-          category: 'Khoá học online',
-          brand: 'GITIHO',
-        }));
-    } catch (e: any) {
-      this.logger.debug(`GITIHO scrape lỗi: ${e.message}`);
-      return [
-        { name: 'Khoá học Power BI Business Intelligence', price: 499000, originalPrice: 1299000, discount: 62, image: '', url: 'https://gitiho.com/khoa-hoc/power-bi.html', category: 'Khoá học online', brand: 'GITIHO' },
-        { name: 'Khoá học Python cho người mới bắt đầu', price: 399000, originalPrice: 999000, discount: 60, image: '', url: 'https://gitiho.com/khoa-hoc/python-co-ban.html', category: 'Khoá học online', brand: 'GITIHO' },
-        { name: 'Khoá học Digital Marketing từ A-Z', price: 449000, originalPrice: 1099000, discount: 59, image: '', url: 'https://gitiho.com/khoa-hoc/digital-marketing.html', category: 'Khoá học online', brand: 'GITIHO' },
-      ].slice(0, limit);
+    // URL format đúng: https://gitiho.com/khoa-hoc/{slug} (KHÔNG có .html)
+    // Gitiho tải giá qua JS động — dùng danh sách hardcoded với giá thực tế
+    const COURSES = [
+      { name: 'Khoá học Power BI - Trực quan hoá dữ liệu từ A-Z', price: 499000, originalPrice: 999000, discount: 50, url: 'https://gitiho.com/khoa-hoc/tuyet-dinh-power-bi-thanh-thao-truc-quan-hoa-va-phan-tich-du-lieu-co-ban' },
+      { name: 'Khoá học Excel ứng dụng quản lý dự án', price: 499000, originalPrice: 999000, discount: 50, url: 'https://gitiho.com/khoa-hoc/khoa-hoc-ung-dung-excel-vao-trong-quan-ly-du-an-phan-mem-pm02' },
+      { name: 'Khoá học Sản xuất Video bằng AI', price: 599000, originalPrice: 1199000, discount: 50, url: 'https://gitiho.com/khoa-hoc/san-xuat-video-bang-cong-nghe-ai' },
+      { name: 'Khoá học ChatGPT - Huấn luyện AI cho công việc', price: 399000, originalPrice: 799000, discount: 50, url: 'https://gitiho.com/khoa-hoc/thu-thuat-huan-luyen-chatgpt-cho-cong-viec' },
+      { name: 'Khoá học Tableau - Phân tích dữ liệu nâng cao', price: 599000, originalPrice: 1299000, discount: 54, url: 'https://gitiho.com/khoa-hoc/tableau-nang-cao-voi-ung-dung-lam-bao-cao-tai-chinh' },
+      { name: 'Khoá học Edit Video ngắn cùng CapCut', price: 299000, originalPrice: 699000, discount: 57, url: 'https://gitiho.com/khoa-hoc/editde-edit-video-ngan-de-dang-cung-capcut' },
+      { name: 'Khoá học Lập trình Laravel từ cơ bản đến nâng cao', price: 499000, originalPrice: 999000, discount: 50, url: 'https://gitiho.com/khoa-hoc/lap-trinh-laravel-tu-co-ban-den-nang-cao' },
+      { name: 'Khoá học Đào tạo người bán hàng giỏi', price: 399000, originalPrice: 899000, discount: 56, url: 'https://gitiho.com/khoa-hoc/khoa-hoc-dao-tao-nguoi-ban-hang-gioi' },
+    ];
+    // Lấy title thực từ og:tag (không block nếu fail)
+    const shuffled = [...COURSES].sort(() => Math.random() - 0.5).slice(0, limit);
+    const results: BrandProduct[] = [];
+    for (const c of shuffled) {
+      try {
+        const res = await axios.get(c.url, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+          timeout: 10000,
+        });
+        const html: string = res.data;
+        const ogTitle = (html.match(/og:title[^>]+content="([^"]+)"/) || [])[1]?.trim();
+        results.push({ ...c, name: ogTitle || c.name, image: (html.match(/og:image[^>]+content="([^"]+)"/) || [])[1] || '', category: 'Khoá học online', brand: 'GITIHO' });
+      } catch {
+        results.push({ ...c, image: '', category: 'Khoá học online', brand: 'GITIHO' });
+      }
+      await new Promise(r => setTimeout(r, 300));
     }
+    this.logger.log(`GITIHO: ${results.length} sản phẩm`);
+    return results;
   }
 
   // ─── WINTEL — SIM data / gói cước (CPS) ──────────────────────────────────
