@@ -209,12 +209,14 @@ export class FacebookGroupsService implements OnModuleInit {
       }
     }
 
-    const { chromium } = await import('playwright');
+    // Dùng playwright-extra + stealth plugin để bypass FB bot detection
+    const { chromium: chromiumExtra } = await import('playwright-extra');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const stealthPlugin = require('puppeteer-extra-plugin-stealth');
+    chromiumExtra.use(stealthPlugin());
     mkdirSync(this.PROFILE_DIR, { recursive: true });
 
-    // launchPersistentContext: lưu toàn bộ profile (cookies, fingerprint, localStorage)
-    // vào disk → kể cả khi container restart, FB nhận ra cùng 1 "browser"
-    const context = await chromium.launchPersistentContext(this.PROFILE_DIR, {
+    const context = await chromiumExtra.launchPersistentContext(this.PROFILE_DIR, {
       headless: true,
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       viewport: { width: 1280, height: 720 },
@@ -235,7 +237,11 @@ export class FacebookGroupsService implements OnModuleInit {
       window.chrome = { runtime: {} };
     });
 
-    // Load cookies từ session file vào profile (sync FB session → persistent profile)
+    this.persistentContext = context;
+    this.persistentBrowser = null; // PersistentContext không có browser object riêng
+    this.logger.log('FB: tạo persistent browser context mới ✅');
+
+    // Inject TẤT CẢ cookies (bao gồm datr) — datr cần thiết để xs hoạt động
     if (existsSync(SESSION_PATH)) {
       try {
         const session = JSON.parse(readFileSync(SESSION_PATH, 'utf8'));
@@ -249,12 +255,106 @@ export class FacebookGroupsService implements OnModuleInit {
           secure: c.secure ?? true,
           sameSite: this.normSameSite(c.sameSite),
         })));
+        this.logger.log(`FB: đã inject ${session.cookies.length} cookies`);
       } catch {}
     }
 
-    this.persistentContext = context;
-    this.persistentBrowser = null; // PersistentContext không có browser object riêng
-    this.logger.log('FB: tạo persistent browser context mới ✅');
+    // Warm-up: visit FB và kiểm tra THỰC SỰ có đăng nhập không
+    // (check element user-specific, không phải URL — FB homepage không redirect khi chưa đăng nhập)
+    try {
+      const warmPage = await context.newPage();
+      await warmPage.goto('https://www.facebook.com/', { timeout: 25000, waitUntil: 'domcontentloaded' });
+      await warmPage.waitForTimeout(4000);
+      // Kiểm tra xem có nút Đăng nhập hay không → nếu có = chưa đăng nhập
+      await warmPage.screenshot({ path: '/app/fb_data/warmup_debug.png' }).catch(() => {});
+      const warmUrl = warmPage.url();
+      this.logger.debug(`warm-up URL: ${warmUrl.slice(0, 80)}`);
+
+      // Xử lý flow đăng nhập qua profile selector
+      try {
+        // Bước 1: Click "Continue" nếu FB hiện màn chọn profile
+        const continueSelectors = [
+          '[role="button"]:has-text("Continue")',
+          'button:has-text("Continue")',
+        ];
+        for (const sel of continueSelectors) {
+          const el = warmPage.locator(sel).first();
+          if (await el.count() > 0 && await el.isVisible()) {
+            this.logger.log('FB: phát hiện màn "Continue as" — đang click...');
+            await el.click({ timeout: 5000 });
+            await warmPage.waitForTimeout(3000);
+            break;
+          }
+        }
+
+        // Bước 2: Nếu có form nhập password (sau khi click Continue hoặc ngay từ đầu)
+        const pwInput = warmPage.locator('input[type="password"], input[name="pass"], #pass').first();
+        if (await pwInput.count() > 0 && await pwInput.isVisible()) {
+          const password = process.env.FACEBOOK_PASSWORD;
+          if (password) {
+            this.logger.log('FB: phát hiện form password — đang đăng nhập...');
+            await pwInput.click();
+            await pwInput.fill(password);
+            await warmPage.waitForTimeout(500);
+            // Click nút Log in / Đăng nhập
+            const loginBtn = warmPage.locator('button[name="login"], button:has-text("Log in"), [role="button"]:has-text("Log in")').first();
+            if (await loginBtn.count() > 0) {
+              await loginBtn.click({ timeout: 5000 });
+            } else {
+              await warmPage.keyboard.press('Enter');
+            }
+            // Đợi redirect sau login
+            await warmPage.waitForTimeout(8000);
+            await warmPage.screenshot({ path: '/app/fb_data/warmup_after_continue.png' }).catch(() => {});
+            const afterUrl = warmPage.url();
+            if (afterUrl.includes('checkpoint') || afterUrl.includes('two_step')) {
+              this.logger.warn('FB: login bị 2FA/checkpoint — cần xác minh thủ công');
+            } else {
+              this.logger.log(`FB: sau login URL = ${afterUrl.slice(0, 60)}`);
+            }
+          } else {
+            this.logger.warn('FB: cần password nhưng FACEBOOK_PASSWORD chưa được set');
+          }
+        } else {
+          this.logger.debug('warm-up: không có form password');
+        }
+      } catch (e: any) {
+        this.logger.debug(`warm-up login lỗi: ${e.message?.slice(0, 50)}`);
+      }
+
+      // Kiểm tra THỰC SỰ đã đăng nhập chưa: tìm thanh nav có avatar/tên user
+      // (guest page và Continue page đều KHÔNG có news feed nav)
+      const isLoggedIn = await warmPage.evaluate(() => {
+        // Tìm nav có profile picture, hoặc link đến profile, hoặc icon messenger
+        const selectors = [
+          '[aria-label="Home"]',  // nav home icon (only logged-in)
+          '[aria-label="Trang chủ"]',
+          'a[href="/"][aria-label]',
+          '[data-testid="blue_bar_profile_link"]',
+        ];
+        for (const sel of selectors) {
+          if (document.querySelector(sel)) return true;
+        }
+        // Kiểm tra xem có chứa menu thanh nav của người dùng đăng nhập không
+        const navEl = document.querySelector('[role="navigation"]');
+        if (navEl && navEl.querySelectorAll('a').length > 5) return true;
+        return false;
+      }).catch(() => false);
+
+      if (warmUrl.includes('login') || warmUrl.includes('checkpoint')) {
+        this.logger.warn('FB: warm-up failed — redirect về login');
+      } else if (isLoggedIn) {
+        this.logger.log('FB: warm-up OK ✅ — đã đăng nhập thành công');
+        await warmPage.evaluate(() => window.scrollBy(0, 300));
+        await warmPage.waitForTimeout(2000);
+      } else {
+        this.logger.warn('FB: warm-up failed — chưa đăng nhập (không tìm thấy nav element)');
+      }
+      await warmPage.close();
+    } catch (e: any) {
+      this.logger.debug(`warm-up lỗi: ${e.message?.slice(0, 60)}`);
+    }
+
     return { browser: null, context };
   }
 
@@ -421,6 +521,9 @@ export class FacebookGroupsService implements OnModuleInit {
     let sent = 0;
     let sessionExpired = false;
 
+    const pageName = process.env.FACEBOOK_PAGE_NAME || 'Tổng hợp ưu đãi - deal hot mỗi ngày';
+    const pageUrl  = process.env.FACEBOOK_PAGE_URL  || `https://www.facebook.com/${process.env.FACEBOOK_PAGE_ID || ''}`;
+
     for (const p of products) {
       if (sessionExpired) break;
       const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
@@ -432,6 +535,11 @@ export class FacebookGroupsService implements OnModuleInit {
         p.category ? `🏷️ ${p.category}` : '',
         ``,
         `👉 Mua ngay: ${p.url}`,
+        ``,
+        `━━━━━━━━━━━━━━━━━━`,
+        `📌 Theo dõi trang để nhận deal hot mỗi ngày:`,
+        `👍 ${pageName}`,
+        `🔗 ${pageUrl}`,
         ``,
         `#deal #muasam #khuyenmai #sale`,
       ].filter(Boolean).join('\n');
@@ -487,30 +595,55 @@ export class FacebookGroupsService implements OnModuleInit {
           this.logger.debug(`${groupSlug}: sau goto → title="${pageTitle}", url=${pageUrl.slice(0, 80)}`);
           try { await page.screenshot({ path: `/app/fb_data/${groupSlug}_debug.png`, fullPage: false }); } catch {}
 
-          // Nếu bị redirect về login/homepage → session hết hạn, tự đăng nhập lại
+          // Nếu bị redirect về login/homepage → thử re-inject cookies trước
           if (!pageUrl.includes('/groups/') && (pageUrl.includes('login') || pageUrl.includes('checkpoint') || pageTitle === 'Facebook')) {
-            this.logger.warn(`${groupSlug}: session hết hạn (${pageUrl.slice(0, 60)}) — đăng nhập lại...`);
+            this.logger.warn(`${groupSlug}: session hết hạn (${pageUrl.slice(0, 60)}) — thử re-inject cookies...`);
             this.sessionValid = false;
             await page.close();
-            const email = process.env.FACEBOOK_EMAIL;
-            const pass = process.env.FACEBOOK_PASSWORD;
-            if (email && pass) {
-              const relogged = await this.loginWithCredentials(email, pass);
-              if (relogged) {
-                // Reset persistent browser để lần gọi tiếp có context mới với cookies mới
-                await this.resetBrowser();
-                this.logger.log('Đăng nhập lại thành công ✅ — lần chạy tiếp sẽ dùng session mới');
-              } else {
-                this.logger.warn('Đăng nhập lại thất bại');
+
+            // Bước 1: re-inject cookies từ session file vào context hiện tại (không tạo browser mới)
+            let recovered = false;
+            if (existsSync(SESSION_PATH) && this.persistentContext) {
+              try {
+                const sess = JSON.parse(readFileSync(SESSION_PATH, 'utf8'));
+                await this.persistentContext.addCookies(sess.cookies.map((c: any) => ({
+                  name: c.name, value: c.value,
+                  domain: c.domain || '.facebook.com', path: c.path || '/',
+                  expires: c.expirationDate ?? c.expires ?? -1,
+                  httpOnly: c.httpOnly ?? false, secure: c.secure ?? true,
+                  sameSite: this.normSameSite(c.sameSite),
+                })));
+                // Kiểm tra xem cookies mới có hợp lệ không
+                const testPage = await this.persistentContext.newPage();
+                await testPage.goto('https://www.facebook.com/', { timeout: 20000, waitUntil: 'domcontentloaded' });
+                await testPage.waitForTimeout(3000);
+                const testUrl = testPage.url();
+                if (!testUrl.includes('login') && !testUrl.includes('checkpoint')) {
+                  this.sessionValid = true;
+                  recovered = true;
+                  this.logger.log('Re-inject cookies thành công ✅ — tiếp tục posting');
+                }
+                await testPage.close();
+              } catch (e: any) {
+                this.logger.debug(`Re-inject lỗi: ${e.message?.slice(0, 60)}`);
               }
             }
-            sessionExpired = true;
-            break; // Dừng inner loop; outer loop sẽ break do sessionExpired
+
+            if (!recovered) {
+              this.logger.warn('Re-inject thất bại — session file có thể đã hết hạn, cần cung cấp cookies mới');
+              sessionExpired = true;
+            }
+            break; // Dừng inner loop; outer loop sẽ break nếu sessionExpired
           }
 
           // Kiểm tra & tự join nếu chưa là thành viên
           const joined = await this.ensureMember(page, groupSlug);
-          if (!joined) { await page.close(); continue; }
+          if (!joined) {
+            // Nếu group bị kick (status 'member' nhưng thực tế pending) → update status
+            this.updateGroupStatus(groupSlug, 'pending');
+            await page.close();
+            continue;
+          }
 
           // Với marketplace group: navigate sang tab "Đăng chủ ý" để dùng regular post composer
           let switchedToDiscussion = false;
