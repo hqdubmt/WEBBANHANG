@@ -25,6 +25,8 @@ export class FacebookGroupsService implements OnModuleInit {
   // Persistent browser — tránh tạo mới mỗi lần gây fingerprint mismatch
   private persistentBrowser: any = null;
   private persistentContext: any = null;
+  // i_user cookie value = fanpage ID đang active trong session
+  private iUserValue = '';
 
   async onModuleInit() {
     // Tự động login khi khởi động nếu có credentials
@@ -255,6 +257,12 @@ export class FacebookGroupsService implements OnModuleInit {
           secure: c.secure ?? true,
           sameSite: this.normSameSite(c.sameSite),
         })));
+        // Lưu i_user để dùng khi navigate group (posting as fanpage)
+        const iUserC = session.cookies.find((c: any) => c.name === 'i_user');
+        if (iUserC?.value) {
+          this.iUserValue = iUserC.value;
+          this.logger.log(`FB: i_user=${this.iUserValue} (fanpage identity)`);
+        }
         this.logger.log(`FB: đã inject ${session.cookies.length} cookies`);
       } catch {}
     }
@@ -311,6 +319,22 @@ export class FacebookGroupsService implements OnModuleInit {
               this.logger.warn('FB: login bị 2FA/checkpoint — cần xác minh thủ công');
             } else {
               this.logger.log(`FB: sau login URL = ${afterUrl.slice(0, 60)}`);
+              // Sau password login, FB reset i_user → re-inject để giữ fanpage identity
+              if (this.iUserValue) {
+                try {
+                  await context.addCookies([{
+                    name: 'i_user',
+                    value: this.iUserValue,
+                    domain: '.facebook.com',
+                    path: '/',
+                    expires: -1,
+                    httpOnly: false,
+                    secure: true,
+                    sameSite: 'None' as const,
+                  }]);
+                  this.logger.log(`FB: re-inject i_user=${this.iUserValue} sau login ✅`);
+                } catch {}
+              }
             }
           } else {
             this.logger.warn('FB: cần password nhưng FACEBOOK_PASSWORD chưa được set');
@@ -551,7 +575,9 @@ export class FacebookGroupsService implements OnModuleInit {
           if (!groupMatch) { await page.close(); continue; }
           const groupSlug = groupMatch[1];
 
-          await page.goto(`https://www.facebook.com/groups/${groupSlug}/`, { timeout: 35000, waitUntil: 'domcontentloaded' });
+          // ?act={i_user} báo cho FB dùng fanpage identity khi vào group
+          const actSuffix = this.iUserValue ? `?act=${this.iUserValue}` : '';
+          await page.goto(`https://www.facebook.com/groups/${groupSlug}/${actSuffix}`, { timeout: 35000, waitUntil: 'domcontentloaded' });
           // Đợi page render xong
           await page.waitForTimeout(5000);
 
@@ -1362,54 +1388,88 @@ export class FacebookGroupsService implements OnModuleInit {
   // ─── Chuyển danh tính sang Fanpage trong compose dialog / marketplace modal
   private async switchToFanpageIdentity(page: any, groupSlug: string): Promise<void> {
     const pageId = process.env.FACEBOOK_PAGE_ID;
-    if (!pageId) return;
+    const pageName = process.env.FACEBOOK_PAGE_NAME || '';
+    if (!pageId && !this.iUserValue) return;
 
     try {
-      // Facebook hiển thị nút chuyển identity gần avatar ở đầu dialog.
-      // Thử các selector phổ biến (Tiếng Việt và Tiếng Anh)
+      // Chụp ảnh dialog để debug identity switcher
+      await page.screenshot({ path: `/app/fb_data/${groupSlug}_compose_dialog.png` }).catch(() => {});
+
+      // Thử các selector (Tiếng Việt / Tiếng Anh / fallback bất kỳ)
       const switcherCandidates = [
         '[role="dialog"] [role="button"][aria-label*="tư cách"]',
         '[role="dialog"] [role="button"][aria-label*="Đăng với"]',
         '[role="dialog"] [role="button"][aria-label*="posting as"]',
         '[role="dialog"] [role="button"][aria-label*="Change who"]',
         '[role="dialog"] [role="button"][aria-label*="Bạn đang đăng"]',
+        '[role="dialog"] [role="button"][aria-label*="Đăng bài với tư cách"]',
+        // Selector rộng hơn: bất kỳ button nào trong dialog có ảnh đại diện (circle img)
+        '[role="dialog"] [role="combobox"]',
+        '[role="dialog"] [aria-haspopup="listbox"]',
+        '[role="dialog"] [aria-haspopup="menu"][role="button"]',
       ];
 
       let switcherFound = false;
       for (const sel of switcherCandidates) {
         const btn = page.locator(sel).first();
         if (await btn.count() > 0 && await btn.isVisible()) {
+          const lbl = await btn.getAttribute('aria-label').catch(() => '');
+          this.logger.debug(`${groupSlug}: found identity switcher: "${lbl}" [${sel}]`);
           await btn.click({ timeout: 5000 });
           switcherFound = true;
           break;
         }
       }
 
-      if (!switcherFound) return;
+      if (!switcherFound) {
+        // Log các buttons trong dialog để debug
+        const dialogBtns = await page.evaluate(() => {
+          const dialog = document.querySelector('[role="dialog"]');
+          if (!dialog) return [];
+          return Array.from(dialog.querySelectorAll('[role="button"]'))
+            .slice(0, 8)
+            .map((e: any) => ({ label: e.getAttribute('aria-label') || '', text: (e.textContent || '').slice(0, 30) }));
+        }).catch(() => []);
+        this.logger.debug(`${groupSlug}: không thấy switcher. Dialog buttons: ${JSON.stringify(dialogBtns)}`);
+        return;
+      }
 
       await page.waitForTimeout(1500);
+      await page.screenshot({ path: `/app/fb_data/${groupSlug}_identity_menu.png` }).catch(() => {});
 
-      // Tìm option của Page trong menu vừa mở
-      // Thử dùng data-id hoặc href chứa pageId
-      const pageOption = page.locator(`[role="option"][data-id="${pageId}"], [role="radio"][data-id="${pageId}"], a[href*="${pageId}"]`).first();
-      if (await pageOption.count() > 0) {
-        await pageOption.click({ force: true });
-        await page.waitForTimeout(800);
-        this.logger.debug(`${groupSlug}: đã chuyển sang Fanpage (id=${pageId}) ✅`);
-        return;
+      // Tìm option của Page theo data-id (pageId hoặc i_user)
+      const idToTry = [pageId, this.iUserValue].filter(Boolean);
+      for (const id of idToTry) {
+        const pageOption = page.locator(`[role="option"][data-id="${id}"], [role="radio"][data-id="${id}"], a[href*="${id}"]`).first();
+        if (await pageOption.count() > 0) {
+          await pageOption.click({ force: true });
+          await page.waitForTimeout(800);
+          this.logger.log(`${groupSlug}: đã chuyển sang Fanpage (id=${id}) ✅`);
+          return;
+        }
       }
 
-      // Fallback: chọn option thứ 2 trong danh sách (thứ 1 là personal profile)
+      // Fallback: tìm option có tên fanpage
+      if (pageName) {
+        const nameOpt = page.locator(`[role="option"]:has-text("${pageName}"), [role="radio"]:has-text("${pageName}")`).first();
+        if (await nameOpt.count() > 0) {
+          await nameOpt.click({ force: true });
+          await page.waitForTimeout(800);
+          this.logger.log(`${groupSlug}: đã chuyển sang Fanpage theo tên "${pageName}" ✅`);
+          return;
+        }
+      }
+
+      // Fallback cuối: chọn option thứ 2 (option[0] = personal profile)
       const allOpts = page.locator('[role="option"], [role="radio"]');
       const optCount = await allOpts.count().catch(() => 0);
+      this.logger.debug(`${groupSlug}: ${optCount} identity options trong menu`);
       if (optCount >= 2) {
+        const opt1Text = await allOpts.nth(1).textContent().catch(() => '');
         await allOpts.nth(1).click({ force: true });
         await page.waitForTimeout(800);
-        this.logger.debug(`${groupSlug}: đã chọn option[1] làm identity ✅`);
-        return;
+        this.logger.log(`${groupSlug}: đã chọn option[1]="${opt1Text?.slice(0, 30)}" làm identity ✅`);
       }
-
-      // Không tìm thấy option — giữ nguyên compose modal, tiếp tục với identity hiện tại
     } catch (e: any) {
       this.logger.debug(`${groupSlug}: switchToFanpageIdentity lỗi: ${e.message?.slice(0, 60)}`);
     }
