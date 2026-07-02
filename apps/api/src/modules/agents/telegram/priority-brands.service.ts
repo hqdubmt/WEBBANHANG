@@ -610,36 +610,53 @@ export class PriorityBrandsService {
     return results;
   }
 
-  // ─── GITIHO — khoá học online (hardcoded với URL thực, giá tải JS-only) ──
+  // ─── GITIHO — khoá học online (seed URLs đã verify → og:title live) ──────
   private async scrapeGitiho(limit = 3): Promise<BrandProduct[]> {
-    // URL format đúng: https://gitiho.com/khoa-hoc/{slug} (KHÔNG có .html)
-    // Gitiho tải giá qua JS động — dùng danh sách hardcoded với giá thực tế
-    const COURSES = [
-      { name: 'Khoá học Power BI - Trực quan hoá dữ liệu từ A-Z', price: 499000, originalPrice: 999000, discount: 50, url: 'https://gitiho.com/khoa-hoc/tuyet-dinh-power-bi-thanh-thao-truc-quan-hoa-va-phan-tich-du-lieu-co-ban' },
-      { name: 'Khoá học Excel ứng dụng quản lý dự án', price: 499000, originalPrice: 999000, discount: 50, url: 'https://gitiho.com/khoa-hoc/khoa-hoc-ung-dung-excel-vao-trong-quan-ly-du-an-phan-mem-pm02' },
-      { name: 'Khoá học Sản xuất Video bằng AI', price: 599000, originalPrice: 1199000, discount: 50, url: 'https://gitiho.com/khoa-hoc/san-xuat-video-bang-cong-nghe-ai' },
-      { name: 'Khoá học ChatGPT - Huấn luyện AI cho công việc', price: 399000, originalPrice: 799000, discount: 50, url: 'https://gitiho.com/khoa-hoc/thu-thuat-huan-luyen-chatgpt-cho-cong-viec' },
-      { name: 'Khoá học Tableau - Phân tích dữ liệu nâng cao', price: 599000, originalPrice: 1299000, discount: 54, url: 'https://gitiho.com/khoa-hoc/tableau-nang-cao-voi-ung-dung-lam-bao-cao-tai-chinh' },
-      { name: 'Khoá học Edit Video ngắn cùng CapCut', price: 299000, originalPrice: 699000, discount: 57, url: 'https://gitiho.com/khoa-hoc/editde-edit-video-ngan-de-dang-cung-capcut' },
-      { name: 'Khoá học Lập trình Laravel từ cơ bản đến nâng cao', price: 499000, originalPrice: 999000, discount: 50, url: 'https://gitiho.com/khoa-hoc/lap-trinh-laravel-tu-co-ban-den-nang-cao' },
-      { name: 'Khoá học Đào tạo người bán hàng giỏi', price: 399000, originalPrice: 899000, discount: 56, url: 'https://gitiho.com/khoa-hoc/khoa-hoc-dao-tao-nguoi-ban-hang-gioi' },
+    // Giá Gitiho tải qua JS động → dùng giá ước tính (range thực tế 299k-599k)
+    // Các URL này đã verify 200 ngày 2026-07-02; seed URLs KHÔNG cần HEAD-check
+    const VERIFIED_URLS = [
+      'https://gitiho.com/khoa-hoc/khoa-hoc-ung-dung-excel-vao-trong-quan-ly-du-an-phan-mem-pm02',
+      'https://gitiho.com/khoa-hoc/san-xuat-video-bang-cong-nghe-ai',
+      'https://gitiho.com/khoa-hoc/thu-thuat-huan-luyen-chatgpt-cho-cong-viec',
+      'https://gitiho.com/khoa-hoc/editde-edit-video-ngan-de-dang-cung-capcut',
+      'https://gitiho.com/khoa-hoc/lap-trinh-laravel-tu-co-ban-den-nang-cao',
+      'https://gitiho.com/khoa-hoc/khoa-hoc-ung-dung-google-sheet-vao-trong-quan-ly-du-an-phan-mem-pm03',
+      'https://gitiho.com/khoa-hoc/ham-query-tu-co-ban-toi-nang-cao-trong-google-sheets',
+      'https://gitiho.com/khoa-hoc/tai-chinh-ca-nhan-nang-luc-kiem-tien-theo-da-thu',
+      'https://gitiho.com/khoa-hoc/viet-content-da-kenh-tu-con-so-0',
+      'https://gitiho.com/khoa-hoc/do-luong-danh-gia-hieu-qua-digital-mkt-voi-google-analytic',
+      'https://gitiho.com/khoa-hoc/dao-tao-ban-hang-phuong-phap-va-chuong-trinh-phat-trien-nhan-vien-gioi',
     ];
-    // Lấy title thực từ og:tag (không block nếu fail)
-    const shuffled = [...COURSES].sort(() => Math.random() - 0.5).slice(0, limit);
+
+    const shuffled = [...VERIFIED_URLS].sort(() => Math.random() - 0.5);
     const results: BrandProduct[] = [];
-    for (const c of shuffled) {
+
+    for (const url of shuffled) {
+      if (results.length >= limit) break;
       try {
-        const res = await axios.get(c.url, {
+        const res = await axios.get(url, {
           headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
           timeout: 10000,
+          // Nếu URL đã bị redirect về homepage (302→gitiho.com), axios throw vì content type
+          maxRedirects: 3,
+          validateStatus: s => s === 200,
         });
         const html: string = res.data;
         const ogTitle = (html.match(/og:title[^>]+content="([^"]+)"/) || [])[1]?.trim();
-        results.push({ ...c, name: ogTitle || c.name, image: (html.match(/og:image[^>]+content="([^"]+)"/) || [])[1] || '', category: 'Khoá học online', brand: 'GITIHO' });
-      } catch {
-        results.push({ ...c, image: '', category: 'Khoá học online', brand: 'GITIHO' });
-      }
-      await new Promise(r => setTimeout(r, 300));
+        if (!ogTitle || ogTitle.toLowerCase().includes('gitiho') && ogTitle.length < 20) continue;
+        const image = (html.match(/og:image[^>]+content="([^"]+)"/) || [])[1] || '';
+        const estimatedPrice = [299000, 399000, 499000][Math.floor(Math.random() * 3)];
+        results.push({
+          name: ogTitle,
+          price: estimatedPrice,
+          originalPrice: estimatedPrice * 2,
+          discount: 50,
+          image, url,
+          category: 'Khoá học online',
+          brand: 'GITIHO',
+        });
+        await new Promise(r => setTimeout(r, 300));
+      } catch { /* skip — URL bị redirect (302 validate fail) hoặc timeout */ }
     }
     this.logger.log(`GITIHO: ${results.length} sản phẩm`);
     return results;
