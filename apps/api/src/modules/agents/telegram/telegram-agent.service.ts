@@ -470,18 +470,22 @@ export class TelegramAgentService {
   async getProductsForPosting(count = 5): Promise<Array<{ name: string; price: number; url: string; image?: string; category?: string }>> {
     this.atWorking = null;
     await this.checkATDeeplink();
-    const half = Math.ceil(count / 2);
-    const [tiki, shopee] = await Promise.all([
-      this.scrapeTikiProducts(half),
-      this.scrapeShopeeProducts(half),
-    ]);
-    return [...tiki, ...shopee].slice(0, count).map(p => ({
-      name: p.name,
-      price: p.price,
-      url: p.affiliateLink || p.originalUrl,
-      image: p.image,
-      category: p.category,
-    }));
+    // Dùng priorityBrands (brands có AT campaign duyệt) thay vì scrapeTiki/Shopee trực tiếp
+    const raw = await this.priorityBrands.getProducts(count * 3);
+    const products = raw
+      .map(p => {
+        const affiliateLink = this.buildAffiliateLinkSmart(p.url, 'fb');
+        if (!affiliateLink) return null;
+        return { name: p.name, price: p.price, url: affiliateLink, image: p.image, category: p.category };
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null)
+      .slice(0, count);
+    if (products.length === 0) {
+      // Fallback: Shopee vẫn có AT campaign
+      const shopee = await this.scrapeShopeeProducts(count);
+      return shopee.map(p => ({ name: p.name, price: p.price, url: p.affiliateLink || p.originalUrl, image: p.image, category: p.category }));
+    }
+    return products;
   }
 
   // ─── Tiki Scraper (không lưu DB) ─────────────────────────────────────────

@@ -424,6 +424,7 @@ export class FacebookGroupsService implements OnModuleInit {
     for (const p of products) {
       if (sessionExpired) break;
       const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
+      this.logger.log(`FB post link: ${p.url.slice(0, 80)}`);
       const postText = [
         `🔥 ${p.name.slice(0, 150)}`,
         ``,
