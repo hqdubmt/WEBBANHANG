@@ -282,15 +282,28 @@ export class TelegramAgentController {
 
   // ─── Facebook Groups (Playwright, không cần API key) ─────────────────────
 
+  @Public()
   @Get('fb-groups/status')
   @ApiOperation({ summary: 'Trạng thái đăng nhập Facebook Groups' })
   fbGroupsStatus() {
     return { loggedIn: this.fbGroups.isLoggedIn() };
   }
 
+  @Public()
+  @Post('fb-groups/load-session')
+  @ApiOperation({ summary: 'Load cookie session từ file /tmp/fb_session.json (không cần Playwright)' })
+  async fbGroupsLoadSession() {
+    const ok = await this.fbGroups.ensureLoggedIn();
+    return { ok, loggedIn: this.fbGroups.isLoggedIn(), message: ok ? 'Session hợp lệ ✅' : 'Session không hợp lệ hoặc file chưa tồn tại' };
+  }
+
+  @Public()
   @Post('fb-groups/login')
   @ApiOperation({ summary: 'Kích hoạt đăng nhập Facebook bằng FACEBOOK_EMAIL/FACEBOOK_PASSWORD trong .env' })
   async fbGroupsLogin() {
+    // Thử load session từ file trước
+    const sessionOk = await this.fbGroups.ensureLoggedIn();
+    if (sessionOk) return { ok: true, message: 'Session cookie hợp lệ ✅ (không cần login lại)' };
     const email = process.env.FACEBOOK_EMAIL;
     const password = process.env.FACEBOOK_PASSWORD;
     if (!email || !password) return { ok: false, message: 'Chưa cấu hình FACEBOOK_EMAIL / FACEBOOK_PASSWORD trong .env' };
@@ -298,25 +311,98 @@ export class TelegramAgentController {
     return { ok, message: ok ? 'Đăng nhập Facebook thành công ✅' : 'Đăng nhập thất bại — kiểm tra email/password hoặc tắt 2FA' };
   }
 
+  @Public()
   @Post('fb-groups/post')
   @ApiOperation({ summary: 'Auto-post vào Facebook Groups (Playwright, không cần API key)' })
-  async fbGroupsPost(@Query('count') count?: string) {
-    const groupUrls = (process.env.FACEBOOK_GROUP_URLS || '').split(',').map(s => s.trim()).filter(Boolean);
-    if (groupUrls.length === 0) {
-      return { sent: 0, message: 'Chưa cấu hình FACEBOOK_GROUP_URLS trong .env' };
+  async fbGroupsPost(
+    @Query('count') count?: string,
+    @Query('limit') limit?: string,
+    @Query('urls') urls?: string,
+    @Query('useTargetList') useTargetList?: string,
+  ) {
+    let groupUrls: string[] = [];
+    if (urls) {
+      groupUrls = urls.split(',').map(s => s.trim()).filter(Boolean);
+    } else if (useTargetList === 'true' || useTargetList === '1') {
+      const maxG = limit ? parseInt(limit) : 20;
+      const records = this.fbGroups.getMemberGroupsForPosting(maxG);
+      groupUrls = records.map(r => r.url);
+    } else {
+      groupUrls = (process.env.FACEBOOK_GROUP_URLS || '').split(',').map(s => s.trim()).filter(Boolean);
+      if (groupUrls.length === 0) groupUrls = await this.svc.getGroupUrlsPublic();
+      if (groupUrls.length === 0) {
+        // Fallback: dùng target list nếu có
+        const records = this.fbGroups.getMemberGroupsForPosting(20);
+        groupUrls = records.map(r => r.url);
+      }
     }
-    const n = count ? parseInt(count) : 3;
+    if (groupUrls.length === 0) {
+      return { sent: 0, message: 'Chưa có group nào — chạy /fb-groups/scan trước' };
+    }
+    const maxGroups = limit ? parseInt(limit) : groupUrls.length;
+    const targets = groupUrls.slice(0, maxGroups);
+    const n = count ? parseInt(count) : 1;
     const products = await this.svc.getProductsForPosting(n);
-    const sent = await this.fbGroups.postToGroups(products, groupUrls);
-    return { sent, groups: groupUrls.length };
+    const sent = await this.fbGroups.postToGroups(products, targets);
+    // Cập nhật lastPostedAt cho các group đã post
+    if (sent > 0) {
+      for (const url of targets.slice(0, sent)) {
+        const slug = url.match(/\/groups\/([^/?&#]+)/)?.[1] || url;
+        this.fbGroups.markGroupPosted(slug);
+      }
+    }
+    return { sent, groups: targets.length, tried: targets.slice(0, 5) };
   }
 
+  @Public()
+  @Post('fb-groups/scan')
+  @ApiOperation({ summary: 'Tự động quét + auto-join groups liên quan fanpage, lưu vào target list' })
+  async fbGroupsScan(@Query('keywords') keywords?: string) {
+    const kws = keywords
+      ? keywords.split(',').map(s => s.trim()).filter(Boolean)
+      : undefined;
+    return this.svc.runGroupScanAndJoin(kws);
+  }
+
+  @Public()
+  @Get('fb-groups/targets')
+  @ApiOperation({ summary: 'Xem danh sách target groups đã join' })
+  fbGroupsTargets() {
+    return { groups: this.fbGroups.loadTargetGroups() };
+  }
+
+  @Public()
+  @Post('fb-groups/targets/add')
+  @ApiOperation({ summary: 'Thêm group vào target list thủ công' })
+  fbGroupsTargetAdd(@Query('url') url: string, @Query('name') name?: string) {
+    if (!url) return { ok: false, message: 'Thiếu url' };
+    const rec = this.fbGroups.addTargetGroup(url, name);
+    return { ok: true, group: rec };
+  }
+
+  @Public()
+  @Post('fb-groups/targets/remove')
+  @ApiOperation({ summary: 'Xóa group khỏi target list' })
+  fbGroupsTargetRemove(@Query('slug') slug: string) {
+    const ok = this.fbGroups.removeTargetGroup(slug);
+    return { ok };
+  }
+
+  @Public()
+  @Post('fb-groups/invite-reactors')
+  @ApiOperation({ summary: 'Mời người react fanpage posts theo dõi fanpage (Graph API)' })
+  async fbGroupsInviteReactors() {
+    return this.fbGroups.inviteGroupReactors([]);
+  }
+
+  @Public()
   @Post('fb-groups/discover')
   @ApiOperation({ summary: 'Tự động tìm Facebook Groups shopping VN và lưu Redis 7 ngày' })
   async fbGroupsDiscover() {
     return this.svc.runGroupDiscoveryNow();
   }
 
+  @Public()
   @Post('fb-groups/logout')
   @ApiOperation({ summary: 'Xoá session Facebook Groups' })
   fbGroupsLogout() {

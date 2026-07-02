@@ -95,16 +95,16 @@ export class TelegramAgentService {
   private readonly FB_GROUPS_TTL = 7 * 24 * 3600; // 7 ngày
 
   private readonly GROUP_SEARCH_KEYWORDS = [
-    'mua sắm online việt nam',
-    'deal hàng giảm giá hôm nay',
-    'khuyến mãi tiki shopee',
-    'hội mua hàng giá tốt',
-    'hàng sale giảm giá mỗi ngày',
-    'mua bán online hà nội',
-    'mua bán online hồ chí minh',
-    'deal hot review sản phẩm',
-    'săn sale online việt nam',
-    'mua hàng tiki giảm giá',
+    'hội săn sale giảm giá việt nam',
+    'deal hot khuyến mãi mỗi ngày',
+    'mã giảm giá tiki shopee lazada',
+    'hội mua sắm online giá rẻ',
+    'săn deal online việt nam',
+    'hàng giảm giá khuyến mãi hôm nay',
+    'hội mua bán hàng giá tốt',
+    'group mua bán online hồ chí minh',
+    'group mua bán online hà nội',
+    'hội thích mua sắm tiết kiệm',
   ];
 
   private readonly AT_PID = process.env.ACCESSTRADE_PID || '';
@@ -1874,10 +1874,56 @@ export class TelegramAgentService {
     await this.discoverAndSaveGroups();
   }
 
+  // Auto-scan + join groups mới mỗi thứ 3 và thứ 6 lúc 2h VN
+  @Cron('0 2 * * 2,5', { timeZone: 'Asia/Ho_Chi_Minh' })
+  async runAutoScanAndJoin() {
+    this.logger.log('[CRON] Auto-scan & join groups mới...');
+    await this.runGroupScanAndJoin();
+  }
+
+  // Auto-post deal vào target groups (7h, 12h, 20h VN)
+  @Cron('0 7,12,20 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  async runTargetGroupAutoPost() {
+    this.logger.log('[CRON] Auto-post vào target groups...');
+    await this.runGroupAutoPost(5);
+  }
+
+  // Mời reactor fanpage posts theo dõi page (mỗi ngày 22h VN)
+  @Cron('0 22 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  async runInviteReactors() {
+    this.logger.log('[CRON] Mời reactors theo dõi fanpage...');
+    await this.fbGroups.inviteGroupReactors([]);
+  }
+
   async runGroupDiscoveryNow(): Promise<{ found: number; groups: string[] }> {
     const groups = await this.discoverAndSaveGroups();
     return { found: groups.length, groups };
   }
+
+  async runGroupScanAndJoin(keywords?: string[]): Promise<{ discovered: number; joined: number; pending: number; totalTargets: number }> {
+    const kws = keywords?.length ? keywords : this.GROUP_SEARCH_KEYWORDS;
+    const result = await this.fbGroups.autoScanAndJoin(kws);
+    const totalTargets = this.fbGroups.loadTargetGroups().length;
+    this.logger.log(`Scan & Join: discovered=${result.discovered}, joined=${result.joined}, pending=${result.pending}, total=${totalTargets}`);
+    return { ...result, totalTargets };
+  }
+
+  async runGroupAutoPost(maxGroups = 10): Promise<{ sent: number; groups: number }> {
+    const records = this.fbGroups.getMemberGroupsForPosting(maxGroups);
+    if (records.length === 0) {
+      this.logger.log('autoPost: không có group nào — chạy scan trước');
+      return { sent: 0, groups: 0 };
+    }
+    const products = await this.getProductsForPosting(1);
+    const sent = await this.fbGroups.postToGroups(products, records.map(r => r.url));
+    if (sent > 0) {
+      for (const r of records.slice(0, sent)) this.fbGroups.markGroupPosted(r.slug);
+    }
+    return { sent, groups: records.length };
+  }
+
+  private readonly GROUPS_FILE = '/app/fb_data/fb_discovered_groups.json';
+  private groupsCache: string[] = [];
 
   private async discoverAndSaveGroups(): Promise<string[]> {
     const loggedIn = await this.fbGroups.ensureLoggedIn();
@@ -1888,25 +1934,45 @@ export class TelegramAgentService {
     this.logger.log('Bắt đầu tự động tìm Facebook groups...');
     const urls = await this.fbGroups.discoverGroupUrls(this.GROUP_SEARCH_KEYWORDS);
     if (urls.length > 0) {
+      this.groupsCache = urls;
+      // Lưu file local làm backup chính
+      try {
+        require('fs').writeFileSync(this.GROUPS_FILE, JSON.stringify(urls));
+        this.logger.log(`Đã lưu ${urls.length} group URLs vào file backup`);
+      } catch {}
+      // Thử lưu Redis
       try {
         await this.redis.set(this.FB_GROUPS_KEY, JSON.stringify(urls), 'EX', this.FB_GROUPS_TTL);
         this.logger.log(`Đã lưu ${urls.length} group URLs vào Redis (TTL 7 ngày)`);
       } catch (e: any) {
-        this.logger.warn(`Redis lưu groups lỗi: ${e.message}`);
+        this.logger.warn(`Redis lưu groups lỗi: ${e.message} (đã có file backup)`);
       }
     }
     return urls;
   }
 
+  async getGroupUrlsPublic(): Promise<string[]> { return this.getGroupUrls(); }
+
   private async getGroupUrls(): Promise<string[]> {
     // Ưu tiên env var nếu có cấu hình thủ công
     const envUrls = (process.env.FACEBOOK_GROUP_URLS || '').split(',').map(s => s.trim()).filter(Boolean);
     if (envUrls.length > 0) return envUrls;
-    // Dùng danh sách tự động tìm từ Redis
+    // In-memory cache
+    if (this.groupsCache.length > 0) return this.groupsCache;
+    // File backup
+    try {
+      const fs = require('fs');
+      if (fs.existsSync(this.GROUPS_FILE)) {
+        const urls: string[] = JSON.parse(fs.readFileSync(this.GROUPS_FILE, 'utf8'));
+        if (urls.length > 0) { this.groupsCache = urls; return urls; }
+      }
+    } catch {}
+    // Redis
     try {
       const stored = await this.redis.get(this.FB_GROUPS_KEY);
       if (stored) {
         const urls: string[] = JSON.parse(stored);
+        this.groupsCache = urls;
         this.logger.log(`Groups từ Redis: ${urls.length} groups`);
         return urls;
       }

@@ -154,6 +154,8 @@ services:
       QDRANT_URL: http://qdrant:6333
     ports:
       - "127.0.0.1:3001:3001"
+    volumes:
+      - ./data/fb:/app/fb_data
     networks:
       - commerce_network
     depends_on:
