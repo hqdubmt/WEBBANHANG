@@ -280,7 +280,23 @@ export class FacebookGroupsMyPhamService implements OnModuleInit {
 
       // Xử lý flow đăng nhập qua profile selector
       try {
-        // Bước 1: Click "Continue" nếu FB hiện màn chọn profile
+        // Vì nhiều tài khoản FB có thể cùng chạy chung server/IP, Facebook đôi khi hiện màn
+        // "Log in to Facebook" liệt kê NHIỀU hồ sơ đã dùng trên "thiết bị" này (không chỉ 1).
+        // Đây khác với màn "Continue as X" (chỉ 1 hồ sơ). Nếu phát hiện ≥2 hồ sơ, KHÔNG tự
+        // bấm chọn (tránh nhầm sang tài khoản khác) — chỉ log rõ và để warm-up fail an toàn.
+        const loginChooserHeading = await warmPage.getByText(/Log in to Facebook|Đăng nhập vào Facebook/i).count().catch(() => 0);
+        if (loginChooserHeading > 0) {
+          const profileRowCount = await warmPage.locator('[role="button"], a[role="link"]')
+            .filter({ has: warmPage.locator('img') })
+            .count().catch(() => 0);
+          if (profileRowCount >= 2) {
+            this.logger.warn(`FB: màn đăng nhập hiện ${profileRowCount} hồ sơ khác nhau (có thể do nhiều tài khoản FB dùng chung server) — KHÔNG tự bấm để tránh chọn nhầm tài khoản. Cần xác minh thủ công.`);
+            await warmPage.close();
+            return { browser: null, context };
+          }
+        }
+
+        // Bước 1: Click "Continue" nếu FB hiện màn chọn profile (chỉ 1 hồ sơ)
         const continueSelectors = [
           '[role="button"]:has-text("Continue")',
           'button:has-text("Continue")',
