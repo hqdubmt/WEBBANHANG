@@ -9,6 +9,7 @@ import { VideoGeneratorService } from './video-generator.service';
 import { TikTokUploaderService } from './tiktok-uploader.service';
 import { ZaloPersonalService } from './zalo-personal.service';
 import { FacebookGroupsService } from './facebook-groups.service';
+import { FacebookGroupsMyPhamService } from './facebook-groups-mypham.service';
 import { AiVideoPipelineService } from './ai-video-pipeline.service';
 import { AiModule } from '../../ai/ai.module';
 import { PriorityBrandsService } from './priority-brands.service';
@@ -418,6 +419,7 @@ const ALL_PROVIDERS = [
   TikTokUploaderService,
   ZaloPersonalService,
   FacebookGroupsService,
+  FacebookGroupsMyPhamService,
   AiVideoPipelineService,
   PriorityBrandsService,
   FanpageContentService,

@@ -7,6 +7,7 @@ import { TelegramBotService } from './telegram-bot.service';
 import { TikTokUploaderService } from './tiktok-uploader.service';
 import { ZaloPersonalService } from './zalo-personal.service';
 import { FacebookGroupsService, CONCUNG_TARGET_GROUPS_FILE } from './facebook-groups.service';
+import { FacebookGroupsMyPhamService } from './facebook-groups-mypham.service';
 import { AiVideoPipelineService } from './ai-video-pipeline.service';
 import { PriorityBrandsService } from './priority-brands.service';
 import { AffiliateTrackerService } from './affiliate-tracker.service';
@@ -42,6 +43,7 @@ export class TelegramAgentController {
     private readonly tiktok: TikTokUploaderService,
     private readonly zalo: ZaloPersonalService,
     private readonly fbGroups: FacebookGroupsService,
+    private readonly fbGroupsMyPham: FacebookGroupsMyPhamService,
     private readonly aiVideoPipeline: AiVideoPipelineService,
     private readonly priorityBrands: PriorityBrandsService,
     private readonly tracker: AffiliateTrackerService,
@@ -491,6 +493,45 @@ export class TelegramAgentController {
   @ApiOperation({ summary: 'Mời người đã react bài đăng gần đây follow trang Chuyên Sale Mỹ Phẩm (Graph API)' })
   async myPhamInviteReactors() {
     return this.svc.runMyPhamInviteReactors();
+  }
+
+  // ─── Group cho Chuyên Sale Mỹ Phẩm — tài khoản cá nhân #2 riêng (Playwright) ────────────────
+
+  @Public()
+  @Post('mypham/group/login')
+  @ApiOperation({ summary: 'Kích hoạt đăng nhập Facebook tài khoản #2 (FACEBOOK_MYPHAM_EMAIL/PASSWORD)' })
+  async myPhamGroupLogin() {
+    const sessionOk = await this.fbGroupsMyPham.ensureLoggedIn();
+    if (sessionOk) return { ok: true, message: 'Session tài khoản #2 hợp lệ ✅ (không cần login lại)' };
+    const email = process.env.FACEBOOK_MYPHAM_EMAIL;
+    const password = process.env.FACEBOOK_MYPHAM_PASSWORD;
+    if (!email || !password) return { ok: false, message: 'Chưa cấu hình FACEBOOK_MYPHAM_EMAIL / FACEBOOK_MYPHAM_PASSWORD trong .env' };
+    const ok = await this.fbGroupsMyPham.loginWithCredentials(email, password);
+    return { ok, message: ok ? 'Đăng nhập tài khoản #2 thành công ✅' : 'Đăng nhập thất bại — kiểm tra email/password hoặc tắt 2FA' };
+  }
+
+  @Public()
+  @Post('mypham/group/scan')
+  @ApiOperation({ summary: 'Quét + auto-join group mỹ phẩm/làm đẹp cho campaign Chuyên Sale Mỹ Phẩm' })
+  async myPhamGroupScan(@Query('keywords') keywords?: string) {
+    const kws = keywords
+      ? keywords.split(',').map(s => s.trim()).filter(Boolean)
+      : undefined;
+    return this.svc.runMyPhamGroupScanAndJoin(kws);
+  }
+
+  @Public()
+  @Get('mypham/group/targets')
+  @ApiOperation({ summary: 'Xem danh sách group mỹ phẩm đã join cho campaign Chuyên Sale Mỹ Phẩm' })
+  myPhamGroupTargets() {
+    return { groups: this.fbGroupsMyPham.loadTargetGroups() };
+  }
+
+  @Public()
+  @Post('mypham/group/post')
+  @ApiOperation({ summary: 'Đăng campaign mỹ phẩm vào group ngay (dùng fanpage Chuyên Sale Mỹ Phẩm)' })
+  async myPhamGroupPost(@Query('limit') limit?: string) {
+    return this.svc.runMyPhamGroupAutoPost(limit ? parseInt(limit) : 10);
   }
 
   @Public()

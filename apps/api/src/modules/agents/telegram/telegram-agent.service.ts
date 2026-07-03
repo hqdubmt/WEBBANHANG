@@ -17,6 +17,7 @@ import { RecycleService } from './recycle.service';
 import { KillSwitchService } from './kill-switch.service';
 import { SelfOptimizationEngineService } from './self-optimization-engine.service';
 import { FacebookGroupsService, CONCUNG_TARGET_GROUPS_FILE } from './facebook-groups.service';
+import { FacebookGroupsMyPhamService } from './facebook-groups-mypham.service';
 import { FanpageContentService } from './fanpage-content.service';
 import { FanpageReceptionService } from './fanpage-reception.service';
 import * as fs from 'fs';
@@ -121,6 +122,20 @@ export class TelegramAgentService {
     'group mẹ và bé',
   ];
 
+  // Keyword scan group mỹ phẩm/làm đẹp — dùng riêng cho campaign Chuyên Sale Mỹ Phẩm
+  private readonly MYPHAM_GROUP_KEYWORDS = [
+    'hội yêu thích mỹ phẩm',
+    'review mỹ phẩm chính hãng',
+    'skincare giá tốt',
+    'hội mê làm đẹp',
+    'mỹ phẩm giá sỉ',
+    'chợ mỹ phẩm online',
+    'hội chị em làm đẹp',
+    'thanh lý mỹ phẩm',
+    'săn sale mỹ phẩm',
+    'group mỹ phẩm skincare',
+  ];
+
   private readonly AT_PID = process.env.ACCESSTRADE_PID || '';
   private readonly AT_AID = process.env.ACCESSTRADE_CONCUNG_AID || ''; // dùng cho health-check
   // URL pattern → AID — chỉ các chiến dịch approval=successful trên AT (verified 2026-07-01)
@@ -167,6 +182,7 @@ export class TelegramAgentService {
     private readonly killSwitch: KillSwitchService,
     private readonly selfOpt: SelfOptimizationEngineService,
     private readonly fbGroups: FacebookGroupsService,
+    private readonly fbGroupsMyPham: FacebookGroupsMyPhamService,
     private readonly fanpageContent: FanpageContentService,
     private readonly fanpageReception: FanpageReceptionService,
   ) {}
@@ -2279,6 +2295,59 @@ export class TelegramAgentService {
   async runMyPhamTimelineEngagementPostCron() {
     this.logger.log('[CRON] MyPham: đăng engagement post lên timeline Chuyên Sale Mỹ Phẩm...');
     await this.runMyPhamTimelineEngagementPost();
+  }
+
+  // ─── Đăng vào group cho Chuyên Sale Mỹ Phẩm — dùng tài khoản cá nhân #2 riêng (Playwright,
+  // TÁCH BIỆT hoàn toàn với tài khoản #1) — fbGroupsMyPham có session/profile/target-list riêng ───
+
+  async runMyPhamGroupScanAndJoin(keywords?: string[]): Promise<{ discovered: number; joined: number; pending: number; totalTargets: number }> {
+    const kws = keywords?.length ? keywords : this.MYPHAM_GROUP_KEYWORDS;
+    const result = await this.fbGroupsMyPham.autoScanAndJoin(kws);
+    const totalTargets = this.fbGroupsMyPham.loadTargetGroups().length;
+    this.logger.log(`MyPham Scan & Join: discovered=${result.discovered}, joined=${result.joined}, pending=${result.pending}, total=${totalTargets}`);
+    return { ...result, totalTargets };
+  }
+
+  async runMyPhamGroupAutoPost(maxGroups = 10): Promise<{ sent: number; groups: number }> {
+    const records = this.fbGroupsMyPham.getMemberGroupsForPosting(maxGroups);
+    if (records.length === 0) {
+      this.logger.log('MyPham autoPost: không có group nào — chạy scan trước');
+      return { sent: 0, groups: 0 };
+    }
+    const raw = await this.priorityBrands.getMyPhamProducts(1);
+    const products = raw
+      .map(p => {
+        const affiliateLink = this.buildAffiliateLinkSmart(p.url, 'fb');
+        if (!affiliateLink) return null;
+        return { name: p.name, price: p.price, url: affiliateLink, image: p.image, category: p.category };
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null);
+    if (products.length === 0) {
+      this.logger.warn('MyPham autoPost: không lấy được sản phẩm mỹ phẩm');
+      return { sent: 0, groups: 0 };
+    }
+    const sent = await this.fbGroupsMyPham.postToGroups(products, records.map(r => r.url), {
+      hashtags: '#mypham #skincare #lamde #khuyenmai #beautydeals',
+    });
+    if (sent > 0) {
+      for (const r of records.slice(0, sent)) this.fbGroupsMyPham.markGroupPosted(r.slug);
+    }
+    return { sent, groups: records.length };
+  }
+
+  // TẠM CHƯA BẬT CRON: tài khoản #2 mới lần đầu dùng Playwright — cần test thủ công qua endpoint
+  // (POST /mypham/group/scan, /mypham/group/post) trước khi tin tưởng bật tự động, tránh lặp lại
+  // sự cố checkpoint/khoá như tài khoản #1 gặp phải ngày đầu dùng.
+  // @Cron('0 3 * * 2,6', { timeZone: 'Asia/Ho_Chi_Minh' })
+  async runMyPhamGroupScanAndJoinCron() {
+    this.logger.log('[CRON] MyPham: Auto-scan & join group mỹ phẩm...');
+    await this.runMyPhamGroupScanAndJoin();
+  }
+
+  // @Cron('30 7,10,13,16,19,21 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  async runMyPhamGroupAutoPostCron() {
+    this.logger.log('[CRON] MyPham: Auto-post vào group mỹ phẩm...');
+    await this.runMyPhamGroupAutoPost(10);
   }
 
   private readonly GROUPS_FILE = '/app/fb_data/fb_discovered_groups.json';
