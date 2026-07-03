@@ -795,13 +795,16 @@ export class FacebookGroupsService implements OnModuleInit {
           ).catch(() => {});
           await page.waitForTimeout(1000);
 
-          // Chuyển danh tính sang Fanpage (nếu cấu hình FACEBOOK_PAGE_ID)
-          await this.switchToFanpageIdentity(page, groupSlug);
+          // KHÔNG gọi switchToFanpageIdentity() ở đây nữa (2026-07-03): hàm đó dùng cứng
+          // process.env.FACEBOOK_PAGE_ID (fanpage chính) làm target, nên khi đang đăng bằng Page
+          // khác (vd Sale Con Cưng qua switchActiveIdentity() gọi TRƯỚC postToGroups) nó sẽ cố
+          // chuyển NHẦM về fanpage chính giữa chừng, phá hỏng identity đang dùng. switchActiveIdentity()
+          // đã đảm bảo đúng identity trước khi vào đây rồi, không cần chuyển lại.
 
-          // Verify dialog vẫn còn sau identity switch
+          // Verify dialog vẫn còn (sanity check)
           const dialogAfterSwitch = await page.$('[role="dialog"]');
           if (!dialogAfterSwitch) {
-            this.logger.warn(`${groupSlug}: dialog đã đóng sau identity switch — bỏ qua`);
+            this.logger.warn(`${groupSlug}: dialog đã đóng — bỏ qua`);
             await page.close();
             continue;
           }
@@ -976,10 +979,21 @@ export class FacebookGroupsService implements OnModuleInit {
                     const btn = page.locator('[role="dialog"] [role="button"]').filter({ hasText: new RegExp(`^${label}$`, 'i') });
                     if (await btn.count() > 0) {
                       await btn.first().click({ timeout: 8000, force: true });
-                      posted = true;
-                      sent++;
+                      // Chờ dialog đóng thật trước khi coi là thành công (tránh đóng tab giữa lúc
+                      // FB còn "Đang đăng" — cùng bug đã fix ở luồng regular post)
+                      let closedOk = false;
+                      for (let wait = 0; wait < 6; wait++) {
+                        await page.waitForTimeout(2000);
+                        if (await page.locator('[role="dialog"]').count() === 0) { closedOk = true; break; }
+                      }
+                      if (closedOk) {
+                        posted = true;
+                        sent++;
+                        this.logger.log(`FB Group OK ✅ (listing step ${step}): ${groupSlug}`);
+                      } else {
+                        this.logger.warn(`${groupSlug}: đã bấm Đăng (listing) nhưng dialog KHÔNG đóng — nghi ngờ chưa submit thành công`);
+                      }
                       foundPost = true;
-                      this.logger.log(`FB Group OK ✅ (listing step ${step}): ${groupSlug}`);
                       break;
                     }
                   } catch {}
@@ -1345,6 +1359,45 @@ export class FacebookGroupsService implements OnModuleInit {
 
     this.logger.log(`autoScanAndJoin: discovered=${discovered}, joined=${joined}, pending=${pending}`);
     return { discovered, joined, pending };
+  }
+
+  // Join lại các group đã có trong danh sách nhưng dưới DANH TÍNH ĐANG ACTIVE hiện tại — dùng khi
+  // group được join trước đó bởi 1 Page khác (tư cách thành viên group KHÔNG dùng chung giữa các
+  // Page/identity trên cùng tài khoản). Gọi switchActiveIdentity() trước khi gọi hàm này.
+  // Xử lý theo batch nhỏ (không phải hết 1 lần) để giảm hành vi bất thường trên tài khoản.
+  async rejoinAsActiveIdentity(listFile: string, batchSize: number): Promise<{ joined: number; pending: number; tried: number }> {
+    if (!await this.ensureLoggedIn()) return { joined: 0, pending: 0, tried: 0 };
+    const groups = this.loadTargetGroups(listFile);
+    const candidates = groups
+      .filter(g => g.status === 'member' || g.status === 'pending')
+      .sort((a, b) => new Date(a.joinedAt || 0).getTime() - new Date(b.joinedAt || 0).getTime())
+      .slice(0, batchSize);
+    if (candidates.length === 0) return { joined: 0, pending: 0, tried: 0 };
+
+    const { context } = await this.getContext();
+    let joined = 0, pending = 0;
+    for (const rec of candidates) {
+      const page = await context.newPage();
+      try {
+        await page.goto(rec.url, { timeout: 30000, waitUntil: 'domcontentloaded' });
+        await page.waitForTimeout(3000);
+        const isMember = await this.ensureMember(page, rec.slug);
+        if (isMember) {
+          this.updateGroupStatus(rec.slug, 'member', { joinedAt: new Date().toISOString() }, listFile);
+          joined++;
+        } else {
+          this.updateGroupStatus(rec.slug, 'pending', { joinedAt: new Date().toISOString() }, listFile);
+          pending++;
+        }
+      } catch (e: any) {
+        this.logger.debug(`rejoinAsActiveIdentity ${rec.slug} lỗi: ${e.message?.slice(0, 60)}`);
+      } finally {
+        await page.close();
+      }
+      await new Promise(r => setTimeout(r, 3000));
+    }
+    this.logger.log(`rejoinAsActiveIdentity: tried=${candidates.length}, joined=${joined}, pending=${pending}`);
+    return { joined, pending, tried: candidates.length };
   }
 
   // Lấy groups đã là member, ưu tiên chưa post gần đây

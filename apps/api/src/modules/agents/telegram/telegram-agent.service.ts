@@ -1923,13 +1923,42 @@ export class TelegramAgentService {
     await this.runConcungGroupScanAndJoin();
   }
 
-  // Post campaign Con Cưng vào group Mẹ & Bé — dùng switchActiveIdentity() (2026-07-03, đã xác nhận
-  // hoạt động qua test thủ công). 10 group/lần, 4 lần/ngày — tần suất vừa phải vì mỗi lần cần 2 lượt
-  // chuyển danh tính (sang Con Cưng rồi về lại chính), tránh tạo thêm hành vi bất thường trên tài khoản.
-  @Cron('45 9,13,17,21 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  // TẠM TẮT (2026-07-03): 145 group trong danh sách được join dưới danh tính fanpage CHÍNH (scan cũ
+  // không chuyển identity trước khi join) — Sale Con Cưng chưa thực sự là thành viên nên post sẽ luôn
+  // fail (hiện nút "Tham gia nhóm" thay vì ô đăng bài). Cần chạy runConcungRejoinGroupsCron đủ nhiều
+  // đợt trước khi bật lại job này.
+  // @Cron('45 9,13,17,21 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async runConcungGroupAutoPostCron() {
     this.logger.log('[CRON] Concung: Auto-post campaign vào group Mẹ & Bé...');
     await this.runConcungGroupAutoPost(10);
+  }
+
+  // Join lại các group Mẹ & Bé dưới danh tính Sale Con Cưng (fix lỗi join nhầm identity ở lần scan
+  // đầu) — chia nhỏ 25 group/lần, 1 lần/ngày, để giảm hành vi bất thường trên tài khoản
+  async runConcungRejoinGroups(batchSize = 25): Promise<{ joined: number; pending: number; tried: number }> {
+    if (!this.CONCUNG_PAGE_ID) return { joined: 0, pending: 0, tried: 0 };
+    const switched = await this.fbGroups.switchActiveIdentity(this.CONCUNG_PAGE_ID);
+    if (!switched) {
+      this.logger.warn('Concung rejoin: chuyển identity sang Sale Con Cưng thất bại — bỏ qua lần này');
+      return { joined: 0, pending: 0, tried: 0 };
+    }
+    let result = { joined: 0, pending: 0, tried: 0 };
+    try {
+      result = await this.fbGroups.rejoinAsActiveIdentity(CONCUNG_TARGET_GROUPS_FILE, batchSize);
+    } finally {
+      if (this.MAIN_PAGE_PROFILE_ID) {
+        const restored = await this.fbGroups.switchActiveIdentity(this.MAIN_PAGE_PROFILE_ID);
+        if (!restored) this.logger.error('Concung rejoin: KHÔNG chuyển lại được fanpage chính — kiểm tra thủ công qua /fb-groups/switch-identity');
+      }
+    }
+    return result;
+  }
+
+  @Cron('30 4 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  async runConcungRejoinGroupsCron() {
+    this.logger.log('[CRON] Concung: join lại group dưới danh tính Sale Con Cưng...');
+    const r = await this.runConcungRejoinGroups(25);
+    this.logger.log(`Concung rejoin xong: tried=${r.tried}, joined=${r.joined}, pending=${r.pending}`);
   }
 
   async runGroupDiscoveryNow(): Promise<{ found: number; groups: string[] }> {

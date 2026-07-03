@@ -445,6 +445,13 @@ export class TelegramAgentController {
   }
 
   @Public()
+  @Post('fb-groups/concung/rejoin')
+  @ApiOperation({ summary: 'Join lại group Mẹ & Bé dưới danh tính Sale Con Cưng (fix lỗi join nhầm identity ở lần scan đầu)' })
+  async fbGroupsConcungRejoin(@Query('batch') batch?: string) {
+    return this.svc.runConcungRejoinGroups(batch ? parseInt(batch) : 25);
+  }
+
+  @Public()
   @Post('fb-groups/concung/timeline/deal')
   @ApiOperation({ summary: 'Đăng 1 bài deal Con Cưng lên timeline fanpage Sale Con Cưng ngay' })
   async fbGroupsConcungTimelineDeal() {
