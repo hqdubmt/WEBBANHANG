@@ -1094,9 +1094,25 @@ export class FacebookGroupsService implements OnModuleInit {
                 if (await btn.count() > 0) {
                   await btn.scrollIntoViewIfNeeded({ timeout: 2000 });
                   await btn.click({ force: true, timeout: 8000 });
-                  posted = true;
-                  sent++;
-                  this.logger.log(`FB Group OK ✅: ${groupSlug}`);
+                  // FB có thể hiện thêm màn "Cài đặt bài viết" (đối tượng/lịch đăng) với nút Đăng
+                  // riêng — chờ dialog thực sự đóng trước khi coi là thành công, tránh đóng tab
+                  // giữa lúc "Đang đăng" còn xử lý (đã phát hiện qua test timeline Con Cưng)
+                  let closed = false;
+                  for (let wait = 0; wait < 6; wait++) {
+                    await page.waitForTimeout(2000);
+                    if (await page.locator('[role="dialog"]').count() === 0) { closed = true; break; }
+                    const settingsDangBtn = page.locator('[role="dialog"] [role="button"]').filter({ hasText: /^Đăng$/ }).last();
+                    if (await settingsDangBtn.count() > 0 && await settingsDangBtn.isEnabled().catch(() => false)) {
+                      await settingsDangBtn.click({ force: true, timeout: 5000 }).catch(() => {});
+                    }
+                  }
+                  if (closed) {
+                    posted = true;
+                    sent++;
+                    this.logger.log(`FB Group OK ✅: ${groupSlug}`);
+                  } else {
+                    this.logger.warn(`${groupSlug}: đã bấm Đăng nhưng dialog KHÔNG đóng sau 12s — nghi ngờ chưa submit thành công`);
+                  }
                   break;
                 }
               } catch {}
@@ -1106,9 +1122,12 @@ export class FacebookGroupsService implements OnModuleInit {
                 const btn = await page.$('[data-testid="react-composer-post-button"]');
                 if (btn) {
                   await btn.evaluate((e: any) => e.click());
-                  posted = true;
-                  sent++;
-                  this.logger.log(`FB Group OK ✅: ${groupSlug}`);
+                  await page.waitForTimeout(6000);
+                  if (await page.locator('[role="dialog"]').count() === 0) {
+                    posted = true;
+                    sent++;
+                    this.logger.log(`FB Group OK ✅: ${groupSlug}`);
+                  }
                 }
               } catch {}
             }
@@ -1353,6 +1372,27 @@ export class FacebookGroupsService implements OnModuleInit {
     return { iUserLive: cookies.find((c: any) => c.name === 'i_user')?.value || null, iUserCached: this.iUserValue };
   }
 
+  // Chụp + đọc text các bài viết hiện có trên timeline 1 Page — dùng để verify bài đã đăng thật chưa
+  async inspectOwnTimeline(pageId: string): Promise<{ posts: string[] }> {
+    if (!await this.ensureLoggedIn()) return { posts: [] };
+    const { context } = await this.getContext();
+    const page = await context.newPage();
+    try {
+      await page.goto(`https://www.facebook.com/${pageId}`, { timeout: 30000, waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(4000);
+      await page.evaluate(() => window.scrollTo(0, 800));
+      await page.waitForTimeout(2000);
+      await page.screenshot({ path: `/app/fb_data/${pageId}_inspect_timeline.png`, fullPage: false }).catch(() => {});
+      const posts = await page.evaluate(() => {
+        const els = Array.from(document.querySelectorAll('[data-ad-preview="message"], [data-ad-comet-preview="message"]'));
+        return els.map((e: any) => (e.textContent || '').slice(0, 150));
+      }).catch(() => []);
+      return { posts };
+    } finally {
+      await page.close();
+    }
+  }
+
   // Chuyển danh tính active (i_user) sang 1 Page khác trong CÙNG session đăng nhập — không cần login
   // mới. Cơ chế: vào trang quản lý Page → click "Chuyển" ở sidebar → xác nhận "Chuyển" trong dialog.
   // Dùng để post lần lượt bằng nhiều Page khác nhau (không đồng thời) trên 1 tài khoản cá nhân.
@@ -1472,9 +1512,27 @@ export class FacebookGroupsService implements OnModuleInit {
           if (await btn.count() > 0) {
             await btn.scrollIntoViewIfNeeded({ timeout: 2000 });
             await btn.click({ force: true, timeout: 8000 });
-            this.logger.log(`postToOwnTimeline(${pageId}): đăng OK ✅ (step ${step})`);
-            await page.waitForTimeout(3000);
-            return true;
+            // FB có thể hiện thêm màn "Cài đặt bài viết" (đối tượng/lịch đăng) với nút Đăng riêng —
+            // chờ tới khi dialog thực sự đóng (xác nhận đăng xong) thay vì đóng tab ngay, tránh cắt
+            // ngang request "Đang đăng" giữa chừng
+            let closed = false;
+            for (let wait = 0; wait < 8; wait++) {
+              await page.waitForTimeout(2000);
+              const stillOpen = await page.locator('[role="dialog"]').count();
+              if (stillOpen === 0) { closed = true; break; }
+              // Nếu màn "Cài đặt bài viết" xuất hiện với nút Đăng riêng — bấm tiếp
+              const settingsDangBtn = page.locator('[role="dialog"] [role="button"]').filter({ hasText: /^Đăng$/ }).last();
+              if (await settingsDangBtn.count() > 0 && await settingsDangBtn.isEnabled().catch(() => false)) {
+                await settingsDangBtn.click({ force: true, timeout: 5000 }).catch(() => {});
+              }
+            }
+            await page.screenshot({ path: `/app/fb_data/${pageId}_after_dang_click.png` }).catch(() => {});
+            if (closed) {
+              this.logger.log(`postToOwnTimeline(${pageId}): đăng OK ✅ (step ${step}, dialog đã đóng)`);
+              return true;
+            }
+            this.logger.warn(`postToOwnTimeline(${pageId}): đã bấm Đăng nhưng dialog KHÔNG đóng sau 16s — nghi ngờ chưa submit thành công`);
+            return false;
           }
         }
         const tiepBtn = page.locator('[role="dialog"] [role="button"]').filter({ hasText: /^Tiếp$/ }).last();

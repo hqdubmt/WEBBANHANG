@@ -406,6 +406,13 @@ export class TelegramAgentController {
   }
 
   @Public()
+  @Get('fb-groups/inspect-timeline')
+  @ApiOperation({ summary: 'Chụp + đọc text các bài viết hiện có trên timeline 1 Page — verify bài đã đăng thật chưa' })
+  async fbGroupsInspectTimeline(@Query('pageId') pageId: string) {
+    return this.fbGroups.inspectOwnTimeline(pageId);
+  }
+
+  @Public()
   @Post('fb-groups/switch-identity')
   @ApiOperation({ summary: 'Chuyển danh tính active (đăng bài với tư cách) sang 1 Page khác trong cùng session — dùng để khôi phục thủ công nếu cron bị lệch danh tính' })
   async fbGroupsSwitchIdentity(@Query('pageId') pageId: string) {
