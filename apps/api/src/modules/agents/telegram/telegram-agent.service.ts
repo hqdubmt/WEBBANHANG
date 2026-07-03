@@ -16,7 +16,7 @@ import { ContentVariantService } from './content-variant.service';
 import { RecycleService } from './recycle.service';
 import { KillSwitchService } from './kill-switch.service';
 import { SelfOptimizationEngineService } from './self-optimization-engine.service';
-import { FacebookGroupsService } from './facebook-groups.service';
+import { FacebookGroupsService, CONCUNG_TARGET_GROUPS_FILE } from './facebook-groups.service';
 import { FanpageContentService } from './fanpage-content.service';
 import { FanpageReceptionService } from './fanpage-reception.service';
 import * as fs from 'fs';
@@ -105,6 +105,20 @@ export class TelegramAgentService {
     'group mua bán online hồ chí minh',
     'group mua bán online hà nội',
     'hội thích mua sắm tiết kiệm',
+  ];
+
+  // Keyword scan group Mẹ & Bé — dùng riêng cho campaign Sale Con Cưng
+  private readonly CONCUNG_GROUP_KEYWORDS = [
+    'hội mẹ bỉm sữa',
+    'mẹ và bé giá tốt',
+    'chợ mẹ và bé',
+    'đồ sơ sinh giá rẻ',
+    'hội nuôi con bằng sữa mẹ',
+    'mẹ bỉm sữa hà nội',
+    'mẹ bỉm sữa hồ chí minh',
+    'chia sẻ kinh nghiệm nuôi con',
+    'thanh lý đồ sơ sinh',
+    'group mẹ và bé',
   ];
 
   private readonly AT_PID = process.env.ACCESSTRADE_PID || '';
@@ -1866,8 +1880,10 @@ export class TelegramAgentService {
     await this.invitePostLikers();
   }
 
-  // Auto-post deal vào Facebook Groups để kéo follower (mỗi 8h)
-  @Cron('0 */8 * * *')
+  // ĐÃ TẮT (2026-07-03): job cũ đăng không giới hạn vào toàn bộ group cache Redis (419 group),
+  // chạy chồng lấn với runTargetGroupAutoPost() và là nguyên nhân gây FB checkpoint lúc 18:51 (2/7).
+  // Giữ lại method postToFacebookGroups() để có thể gọi thủ công qua runFollowerGrowthNow() nếu cần.
+  // @Cron('0 */8 * * *')
   async runFacebookGroupPost() {
     await this.postToFacebookGroups();
   }
@@ -1885,11 +1901,11 @@ export class TelegramAgentService {
     await this.runGroupScanAndJoin();
   }
 
-  // Auto-post deal vào target groups (7h, 12h, 20h VN)
-  @Cron('0 7,12,20 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  // Auto-post deal vào target groups — 15 groups/lần, mỗi giờ 1 lần từ 6h đến 22h VN (17 khung giờ/ngày)
+  @Cron('0 6-22 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async runTargetGroupAutoPost() {
     this.logger.log('[CRON] Auto-post vào target groups...');
-    await this.runGroupAutoPost(5);
+    await this.runGroupAutoPost(15);
   }
 
   // Mời reactor fanpage posts theo dõi page (mỗi ngày 22h VN)
@@ -1897,6 +1913,23 @@ export class TelegramAgentService {
   async runInviteReactors() {
     this.logger.log('[CRON] Mời reactors theo dõi fanpage...');
     await this.fbGroups.inviteGroupReactors([]);
+  }
+
+  // ── Campaign Sale Con Cưng ──
+  // Scan + join group Mẹ & Bé — T4 và CN lúc 3h VN (lệch giờ với scan chính T3/T6 2h, tránh trùng)
+  @Cron('0 3 * * 3,0', { timeZone: 'Asia/Ho_Chi_Minh' })
+  async runConcungAutoScanAndJoin() {
+    this.logger.log('[CRON] Concung: Auto-scan & join group Mẹ & Bé...');
+    await this.runConcungGroupScanAndJoin();
+  }
+
+  // Post campaign Con Cưng vào group Mẹ & Bé — dùng switchActiveIdentity() (2026-07-03, đã xác nhận
+  // hoạt động qua test thủ công). 10 group/lần, 4 lần/ngày — tần suất vừa phải vì mỗi lần cần 2 lượt
+  // chuyển danh tính (sang Con Cưng rồi về lại chính), tránh tạo thêm hành vi bất thường trên tài khoản.
+  @Cron('45 9,13,17,21 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  async runConcungGroupAutoPostCron() {
+    this.logger.log('[CRON] Concung: Auto-post campaign vào group Mẹ & Bé...');
+    await this.runConcungGroupAutoPost(10);
   }
 
   async runGroupDiscoveryNow(): Promise<{ found: number; groups: string[] }> {
@@ -1924,6 +1957,132 @@ export class TelegramAgentService {
       for (const r of records.slice(0, sent)) this.fbGroups.markGroupPosted(r.slug);
     }
     return { sent, groups: records.length };
+  }
+
+  // ─── Campaign Sale Con Cưng (fanpage riêng, group Mẹ & Bé riêng) ───────────
+
+  private readonly CONCUNG_PAGE_ID = process.env.FACEBOOK_CONCUNG_PAGE_ID || '';
+  private readonly CONCUNG_PAGE_NAME = process.env.FACEBOOK_CONCUNG_PAGE_NAME || 'Sale Con Cưng';
+  private readonly CONCUNG_PAGE_URL = process.env.FACEBOOK_CONCUNG_PAGE_URL
+    || (this.CONCUNG_PAGE_ID ? `https://www.facebook.com/profile.php?id=${this.CONCUNG_PAGE_ID}` : '');
+  // ID dạng profile.php của fanpage chính — dùng để chuyển identity về lại sau khi đăng campaign Con Cưng
+  private readonly MAIN_PAGE_PROFILE_ID = process.env.FACEBOOK_PAGE_PROFILE_ID || '';
+
+  async runConcungGroupScanAndJoin(keywords?: string[]): Promise<{ discovered: number; joined: number; pending: number; totalTargets: number }> {
+    const kws = keywords?.length ? keywords : this.CONCUNG_GROUP_KEYWORDS;
+    const result = await this.fbGroups.autoScanAndJoin(kws, CONCUNG_TARGET_GROUPS_FILE);
+    const totalTargets = this.fbGroups.loadTargetGroups(CONCUNG_TARGET_GROUPS_FILE).length;
+    this.logger.log(`Concung Scan & Join: discovered=${result.discovered}, joined=${result.joined}, pending=${result.pending}, total=${totalTargets}`);
+    return { ...result, totalTargets };
+  }
+
+  async runConcungGroupAutoPost(maxGroups = 10): Promise<{ sent: number; groups: number }> {
+    if (!this.CONCUNG_PAGE_ID) {
+      this.logger.warn('Concung autoPost: chưa cấu hình FACEBOOK_CONCUNG_PAGE_ID trong .env');
+      return { sent: 0, groups: 0 };
+    }
+    const records = this.fbGroups.getMemberGroupsForPosting(maxGroups, CONCUNG_TARGET_GROUPS_FILE);
+    if (records.length === 0) {
+      this.logger.log('Concung autoPost: không có group nào — chạy scan trước');
+      return { sent: 0, groups: 0 };
+    }
+    const raw = await this.priorityBrands.getConCungProducts(1);
+    const products = raw
+      .map(p => {
+        const affiliateLink = this.buildAffiliateLinkSmart(p.url, 'fb');
+        if (!affiliateLink) return null;
+        return { name: p.name, price: p.price, url: affiliateLink, image: p.image, category: p.category };
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null);
+    if (products.length === 0) {
+      this.logger.warn('Concung autoPost: không lấy được sản phẩm Con Cưng');
+      return { sent: 0, groups: 0 };
+    }
+    // Chuyển active identity sang Sale Con Cưng trước khi đăng — bắt buộc, không post nếu chuyển thất bại
+    // (tránh lặp lại lỗi đăng nhầm danh tính fanpage chính)
+    const switched = await this.fbGroups.switchActiveIdentity(this.CONCUNG_PAGE_ID);
+    if (!switched) {
+      this.logger.warn('Concung autoPost: chuyển identity sang Sale Con Cưng thất bại — bỏ qua lần này');
+      return { sent: 0, groups: 0 };
+    }
+
+    let sent = 0;
+    try {
+      sent = await this.fbGroups.postToGroups(products, records.map(r => r.url), {
+        pageName: this.CONCUNG_PAGE_NAME,
+        pageUrl: this.CONCUNG_PAGE_URL,
+        hashtags: '#mevabe #concung #dososinh #meandbe #bimsua',
+        listFile: CONCUNG_TARGET_GROUPS_FILE,
+      });
+      if (sent > 0) {
+        for (const r of records.slice(0, sent)) this.fbGroups.markGroupPosted(r.slug, CONCUNG_TARGET_GROUPS_FILE);
+      }
+    } finally {
+      // Luôn chuyển về fanpage chính sau khi xong, kể cả khi lỗi — job đăng deal chung chạy hàng giờ
+      // phải luôn thấy đúng identity mặc định
+      if (this.MAIN_PAGE_PROFILE_ID) {
+        const restored = await this.fbGroups.switchActiveIdentity(this.MAIN_PAGE_PROFILE_ID);
+        if (!restored) this.logger.error('Concung autoPost: KHÔNG chuyển lại được fanpage chính — cần kiểm tra thủ công qua /fb-groups/switch-identity');
+      }
+    }
+    return { sent, groups: records.length };
+  }
+
+  // Đăng 1 bài (deal hoặc engagement) lên chính timeline Sale Con Cưng — luôn switch identity đi/về
+  private async postToConcungTimeline(text: string): Promise<boolean> {
+    if (!this.CONCUNG_PAGE_ID) {
+      this.logger.warn('Concung timeline post: chưa cấu hình FACEBOOK_CONCUNG_PAGE_ID');
+      return false;
+    }
+    const switched = await this.fbGroups.switchActiveIdentity(this.CONCUNG_PAGE_ID);
+    if (!switched) {
+      this.logger.warn('Concung timeline post: chuyển identity thất bại — bỏ qua lần này');
+      return false;
+    }
+    let ok = false;
+    try {
+      ok = await this.fbGroups.postToOwnTimeline(this.CONCUNG_PAGE_ID, text);
+    } finally {
+      if (this.MAIN_PAGE_PROFILE_ID) {
+        const restored = await this.fbGroups.switchActiveIdentity(this.MAIN_PAGE_PROFILE_ID);
+        if (!restored) this.logger.error('Concung timeline post: KHÔNG chuyển lại được fanpage chính — kiểm tra thủ công qua /fb-groups/switch-identity');
+      }
+    }
+    return ok;
+  }
+
+  async runConcungTimelineDealPost(): Promise<{ ok: boolean }> {
+    const raw = await this.priorityBrands.getConCungProducts(1);
+    if (raw.length === 0) return { ok: false };
+    const p = raw[0];
+    const affiliateLink = this.buildAffiliateLinkSmart(p.url, 'fb');
+    if (!affiliateLink) return { ok: false };
+    const text = this.fanpageContent.buildDealPost({
+      name: p.name, price: p.price, category: p.category,
+      brand: p.brand, discount: p.discount, affiliateLink,
+    });
+    const ok = await this.postToConcungTimeline(text);
+    return { ok };
+  }
+
+  async runConcungTimelineEngagementPost(): Promise<{ ok: boolean }> {
+    const text = this.fanpageContent.buildEngagementPost('tips_baby');
+    const ok = await this.postToConcungTimeline(text);
+    return { ok };
+  }
+
+  // Cron riêng cho timeline Sale Con Cưng — giống nhịp fanpage chính (6 deal + 1 engagement/ngày),
+  // lệch phút so với job group Con Cưng (:45) và job group chính (:00) để không chạy chồng
+  @Cron('15 8,12,15,18,20,22 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  async runConcungTimelineDealPostCron() {
+    this.logger.log('[CRON] Concung: đăng deal lên timeline Sale Con Cưng...');
+    await this.runConcungTimelineDealPost();
+  }
+
+  @Cron('15 10 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  async runConcungTimelineEngagementPostCron() {
+    this.logger.log('[CRON] Concung: đăng engagement post lên timeline Sale Con Cưng...');
+    await this.runConcungTimelineEngagementPost();
   }
 
   private readonly GROUPS_FILE = '/app/fb_data/fb_discovered_groups.json';

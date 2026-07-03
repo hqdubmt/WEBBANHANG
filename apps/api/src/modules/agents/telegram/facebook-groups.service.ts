@@ -13,6 +13,7 @@ export interface FbGroupRecord {
 }
 
 const TARGET_GROUPS_FILE = '/app/fb_data/fb_target_groups.json';
+export const CONCUNG_TARGET_GROUPS_FILE = '/app/fb_data/fb_target_groups_concung.json';
 const GROUPS_META_FILE = '/app/fb_data/fb_groups_meta.json';
 
 const SESSION_PATH = '/app/fb_data/fb_session.json';
@@ -538,6 +539,7 @@ export class FacebookGroupsService implements OnModuleInit {
   async postToGroups(
     products: Array<{ name: string; price: number; url: string; image?: string; category?: string }>,
     groupUrls: string[],
+    opts?: { pageId?: string; pageName?: string; pageUrl?: string; hashtags?: string; listFile?: string },
   ): Promise<number> {
     if (!await this.ensureLoggedIn()) return 0;
 
@@ -545,8 +547,12 @@ export class FacebookGroupsService implements OnModuleInit {
     let sent = 0;
     let sessionExpired = false;
 
-    const pageName = process.env.FACEBOOK_PAGE_NAME || 'Tổng hợp ưu đãi - deal hot mỗi ngày';
-    const pageUrl  = process.env.FACEBOOK_PAGE_URL  || `https://www.facebook.com/${process.env.FACEBOOK_PAGE_ID || ''}`;
+    const pageName = opts?.pageName || process.env.FACEBOOK_PAGE_NAME || 'Tổng hợp ưu đãi - deal hot mỗi ngày';
+    const pageUrl  = opts?.pageUrl  || process.env.FACEBOOK_PAGE_URL  || `https://www.facebook.com/${process.env.FACEBOOK_PAGE_ID || ''}`;
+    const hashtags = opts?.hashtags || '#deal #muasam #khuyenmai #sale';
+    // act= identity dùng cho URL group — mặc định theo session hiện tại, có thể override để đăng bằng Page khác
+    const actIdentity = opts?.pageId || this.iUserValue;
+    const listFile = opts?.listFile || TARGET_GROUPS_FILE;
 
     for (const p of products) {
       if (sessionExpired) break;
@@ -565,7 +571,7 @@ export class FacebookGroupsService implements OnModuleInit {
         `👍 ${pageName}`,
         `🔗 ${pageUrl}`,
         ``,
-        `#deal #muasam #khuyenmai #sale`,
+        hashtags,
       ].filter(Boolean).join('\n');
 
       for (const groupUrl of groupUrls) {
@@ -576,7 +582,7 @@ export class FacebookGroupsService implements OnModuleInit {
           const groupSlug = groupMatch[1];
 
           // ?act={i_user} báo cho FB dùng fanpage identity khi vào group
-          const actSuffix = this.iUserValue ? `?act=${this.iUserValue}` : '';
+          const actSuffix = actIdentity ? `?act=${actIdentity}` : '';
           await page.goto(`https://www.facebook.com/groups/${groupSlug}/${actSuffix}`, { timeout: 35000, waitUntil: 'domcontentloaded' });
           // Đợi page render xong
           await page.waitForTimeout(5000);
@@ -666,7 +672,7 @@ export class FacebookGroupsService implements OnModuleInit {
           const joined = await this.ensureMember(page, groupSlug);
           if (!joined) {
             // Nếu group bị kick (status 'member' nhưng thực tế pending) → update status
-            this.updateGroupStatus(groupSlug, 'pending');
+            this.updateGroupStatus(groupSlug, 'pending', undefined, listFile);
             await page.close();
             continue;
           }
@@ -1142,54 +1148,55 @@ export class FacebookGroupsService implements OnModuleInit {
 
   // ─── Target Group Management ──────────────────────────────────────────────
 
-  loadTargetGroups(): FbGroupRecord[] {
+  // listFile chọn danh sách group: mặc định generic, hoặc CONCUNG_TARGET_GROUPS_FILE cho campaign Mẹ & Bé
+  loadTargetGroups(listFile: string = TARGET_GROUPS_FILE): FbGroupRecord[] {
     try {
-      if (existsSync(TARGET_GROUPS_FILE)) return JSON.parse(readFileSync(TARGET_GROUPS_FILE, 'utf8'));
+      if (existsSync(listFile)) return JSON.parse(readFileSync(listFile, 'utf8'));
     } catch {}
     return [];
   }
 
-  saveTargetGroups(groups: FbGroupRecord[]): void {
-    writeFileSync(TARGET_GROUPS_FILE, JSON.stringify(groups, null, 2));
+  saveTargetGroups(groups: FbGroupRecord[], listFile: string = TARGET_GROUPS_FILE): void {
+    writeFileSync(listFile, JSON.stringify(groups, null, 2));
   }
 
-  addTargetGroup(url: string, name?: string): FbGroupRecord {
-    const groups = this.loadTargetGroups();
+  addTargetGroup(url: string, name?: string, listFile: string = TARGET_GROUPS_FILE): FbGroupRecord {
+    const groups = this.loadTargetGroups(listFile);
     const slug = url.match(/\/groups\/([^/?&#]+)/)?.[1] || url;
     const existing = groups.find(g => g.slug === slug || g.url === url);
     if (existing) return existing;
     const rec: FbGroupRecord = { url, slug, name, status: 'discovered', joinedAt: new Date().toISOString() };
     groups.push(rec);
-    this.saveTargetGroups(groups);
+    this.saveTargetGroups(groups, listFile);
     return rec;
   }
 
-  removeTargetGroup(slug: string): boolean {
-    const groups = this.loadTargetGroups();
+  removeTargetGroup(slug: string, listFile: string = TARGET_GROUPS_FILE): boolean {
+    const groups = this.loadTargetGroups(listFile);
     const filtered = groups.filter(g => g.slug !== slug && g.url !== slug && !g.url.endsWith(`/${slug}`));
-    this.saveTargetGroups(filtered);
+    this.saveTargetGroups(filtered, listFile);
     return filtered.length < groups.length;
   }
 
-  updateGroupStatus(slug: string, status: FbGroupRecord['status'], extra?: Partial<FbGroupRecord>): void {
-    const groups = this.loadTargetGroups();
+  updateGroupStatus(slug: string, status: FbGroupRecord['status'], extra?: Partial<FbGroupRecord>, listFile: string = TARGET_GROUPS_FILE): void {
+    const groups = this.loadTargetGroups(listFile);
     const idx = groups.findIndex(g => g.slug === slug || g.url.includes(slug));
     if (idx >= 0) {
       groups[idx] = { ...groups[idx], status, ...extra };
-      this.saveTargetGroups(groups);
+      this.saveTargetGroups(groups, listFile);
     }
   }
 
   // ─── Auto-Scan + Auto-Join Groups ─────────────────────────────────────────
 
-  async autoScanAndJoin(keywords: string[]): Promise<{ discovered: number; joined: number; pending: number }> {
+  async autoScanAndJoin(keywords: string[], listFile: string = TARGET_GROUPS_FILE): Promise<{ discovered: number; joined: number; pending: number }> {
     if (!await this.ensureLoggedIn()) {
       this.logger.warn('autoScanAndJoin: không thể đăng nhập Facebook');
       return { discovered: 0, joined: 0, pending: 0 };
     }
 
     const { context } = await this.getContext();
-    const existingGroups = this.loadTargetGroups();
+    const existingGroups = this.loadTargetGroups(listFile);
     const existingSlugs = new Set(existingGroups.map(g => g.slug));
 
     let discovered = 0;
@@ -1308,10 +1315,10 @@ export class FacebookGroupsService implements OnModuleInit {
       }
 
       // Thêm vào target list (cả pending lẫn member)
-      const existing = this.loadTargetGroups();
+      const existing = this.loadTargetGroups(listFile);
       if (!existing.find(g => g.slug === rec.slug)) {
         existing.push(rec);
-        this.saveTargetGroups(existing);
+        this.saveTargetGroups(existing, listFile);
       }
 
       await new Promise(r => setTimeout(r, 3000));
@@ -1322,8 +1329,8 @@ export class FacebookGroupsService implements OnModuleInit {
   }
 
   // Lấy groups đã là member, ưu tiên chưa post gần đây
-  getMemberGroupsForPosting(maxCount: number = 20): FbGroupRecord[] {
-    const groups = this.loadTargetGroups();
+  getMemberGroupsForPosting(maxCount: number = 20, listFile: string = TARGET_GROUPS_FILE): FbGroupRecord[] {
+    const groups = this.loadTargetGroups(listFile);
     const members = groups.filter(g => g.status === 'member');
     // Sắp xếp: chưa post lâu nhất lên đầu
     members.sort((a, b) => {
@@ -1334,8 +1341,166 @@ export class FacebookGroupsService implements OnModuleInit {
     return members.slice(0, maxCount);
   }
 
-  markGroupPosted(slug: string): void {
-    this.updateGroupStatus(slug, 'member', { lastPostedAt: new Date().toISOString() });
+  markGroupPosted(slug: string, listFile: string = TARGET_GROUPS_FILE): void {
+    this.updateGroupStatus(slug, 'member', { lastPostedAt: new Date().toISOString() }, listFile);
+  }
+
+  // Kiểm tra nhanh danh tính đang active thực tế (không điều hướng đâu khác, chỉ đọc cookie hiện có)
+  async getLiveIdentity(): Promise<{ iUserLive: string | null; iUserCached: string }> {
+    if (!await this.ensureLoggedIn()) return { iUserLive: null, iUserCached: this.iUserValue };
+    const { context } = await this.getContext();
+    const cookies = await context.cookies('https://www.facebook.com');
+    return { iUserLive: cookies.find((c: any) => c.name === 'i_user')?.value || null, iUserCached: this.iUserValue };
+  }
+
+  // Chuyển danh tính active (i_user) sang 1 Page khác trong CÙNG session đăng nhập — không cần login
+  // mới. Cơ chế: vào trang quản lý Page → click "Chuyển" ở sidebar → xác nhận "Chuyển" trong dialog.
+  // Dùng để post lần lượt bằng nhiều Page khác nhau (không đồng thời) trên 1 tài khoản cá nhân.
+  async switchActiveIdentity(pageId: string): Promise<boolean> {
+    if (!pageId) return false;
+    if (this.iUserValue === pageId) return true; // đã đúng identity, khỏi chuyển
+    if (!await this.ensureLoggedIn()) return false;
+    const { context } = await this.getContext();
+    const page = await context.newPage();
+    try {
+      await page.goto(`https://www.facebook.com/${pageId}`, { timeout: 30000, waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(4000);
+
+      const switchLink = page.locator('[role="button"], a[role="link"]').filter({ hasText: 'Chuyển' }).first();
+      if (await switchLink.count() === 0) {
+        this.logger.warn(`switchActiveIdentity(${pageId}): không tìm thấy link "Chuyển" — có thể đã đúng identity hoặc không phải admin`);
+        return false;
+      }
+      await switchLink.click({ timeout: 5000 });
+      await page.waitForTimeout(2000);
+
+      const confirmBtn = page.locator('[role="dialog"] [role="button"]').filter({ hasText: /^Chuyển$/ }).first();
+      if (await confirmBtn.count() > 0 && await confirmBtn.isVisible()) {
+        await confirmBtn.click({ timeout: 5000 });
+        await page.waitForTimeout(3000);
+      }
+
+      const cookies = await context.cookies('https://www.facebook.com');
+      const liveIUser = cookies.find((c: any) => c.name === 'i_user')?.value || null;
+      if (liveIUser === pageId) {
+        this.iUserValue = pageId;
+        this.logger.log(`switchActiveIdentity: đã chuyển sang ${pageId} ✅`);
+        return true;
+      }
+      this.logger.warn(`switchActiveIdentity(${pageId}): sau khi click, i_user vẫn là ${liveIUser}`);
+      return false;
+    } catch (e: any) {
+      this.logger.warn(`switchActiveIdentity(${pageId}) lỗi: ${e.message?.slice(0, 100)}`);
+      return false;
+    } finally {
+      await page.close();
+    }
+  }
+
+  // Đăng bài lên timeline CỦA CHÍNH Page (không phải vào group) — giả định identity đã đúng
+  // (gọi switchActiveIdentity trước). Dùng lại composer trigger + nút Đăng giống postToGroups.
+  async postToOwnTimeline(pageId: string, postText: string): Promise<boolean> {
+    if (!await this.ensureLoggedIn()) return false;
+    const { context } = await this.getContext();
+    const page = await context.newPage();
+    try {
+      await page.goto(`https://www.facebook.com/${pageId}`, { timeout: 30000, waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(4000);
+      // Composer nằm dưới ảnh bìa/giới thiệu — cuộn xuống để lazy-load
+      await page.evaluate(() => window.scrollTo(0, 500));
+      await page.waitForTimeout(2000);
+      await page.screenshot({ path: `/app/fb_data/${pageId}_own_timeline.png` }).catch(() => {});
+
+      const composerTriggers = [
+        '[placeholder*="Viết gì đó"]',
+        '[placeholder*="Bạn đang nghĩ gì"]',
+        '[placeholder*="Write something"]',
+        "[placeholder*=\"What's on your mind\"]",
+        '[aria-label*="Tạo bài viết"]',
+        '[aria-label*="Create a post"]',
+        'div[role="button"]:has-text("Viết gì đó")',
+        'div[role="button"]:has-text("Bạn đang nghĩ gì")',
+        'div[role="button"]:has-text("Write something")',
+      ];
+      let triggerClicked = false;
+      for (const sel of composerTriggers) {
+        try {
+          const loc = page.locator(sel).first();
+          if (await loc.count() > 0 && await loc.isVisible()) {
+            await loc.click({ timeout: 8000 });
+            triggerClicked = true;
+            break;
+          }
+        } catch {}
+      }
+      if (!triggerClicked) {
+        for (const ph of ['Bạn đang nghĩ gì', 'Viết gì đó', "What's on your mind", 'Write something']) {
+          try {
+            const el = page.getByPlaceholder(ph, { exact: false });
+            if (await el.count() > 0 && await el.first().isVisible()) {
+              await el.first().click({ timeout: 8000 });
+              triggerClicked = true;
+              break;
+            }
+          } catch {}
+        }
+      }
+      if (!triggerClicked) {
+        const ceEls = await page.$$eval('[contenteditable], [role="button"], [data-placeholder]', (els: any[]) =>
+          els.slice(0, 15).map((e: any) => ({ ph: e.getAttribute('data-placeholder') || '', label: e.getAttribute('aria-label') || '', text: (e.textContent || '').slice(0, 30) })));
+        this.logger.debug(`postToOwnTimeline(${pageId}): candidates: ${JSON.stringify(ceEls)}`);
+        this.logger.warn(`postToOwnTimeline(${pageId}): không tìm thấy composer trigger`);
+        return false;
+      }
+      await page.waitForTimeout(1500);
+
+      const editorLoc = page.locator('[role="dialog"] [contenteditable="true"], [role="dialog"] [role="textbox"]').first();
+      if (await editorLoc.count() === 0) {
+        this.logger.warn(`postToOwnTimeline(${pageId}): không tìm thấy editor`);
+        return false;
+      }
+      await editorLoc.click({ timeout: 5000 });
+      await page.waitForTimeout(500);
+      await page.keyboard.type(postText, { delay: 15 });
+      await page.waitForTimeout(2000);
+
+      // Nếu có link preview, FB yêu cầu bấm "Tiếp" 1-2 bước trước khi hiện nút "Đăng"
+      for (let step = 0; step < 3; step++) {
+        const dangBtn = page.locator('[role="dialog"] [role="button"]').filter({ hasText: /^Đăng$/ }).last();
+        const postBtn = page.locator('[role="dialog"] [role="button"]').filter({ hasText: /^Post$/ }).last();
+        for (const btn of [dangBtn, postBtn]) {
+          if (await btn.count() > 0) {
+            await btn.scrollIntoViewIfNeeded({ timeout: 2000 });
+            await btn.click({ force: true, timeout: 8000 });
+            this.logger.log(`postToOwnTimeline(${pageId}): đăng OK ✅ (step ${step})`);
+            await page.waitForTimeout(3000);
+            return true;
+          }
+        }
+        const tiepBtn = page.locator('[role="dialog"] [role="button"]').filter({ hasText: /^Tiếp$/ }).last();
+        if (await tiepBtn.count() > 0) {
+          await tiepBtn.scrollIntoViewIfNeeded({ timeout: 2000 });
+          await tiepBtn.click({ force: true, timeout: 8000 });
+          await page.waitForTimeout(2000);
+          continue;
+        }
+        break;
+      }
+      const dialogBtns = await page.evaluate(() => {
+        const dialog = document.querySelector('[role="dialog"]');
+        if (!dialog) return 'NO_DIALOG';
+        return Array.from(dialog.querySelectorAll('[role="button"]'))
+          .slice(0, 12)
+          .map((e: any) => ({ label: e.getAttribute('aria-label') || '', text: (e.textContent || '').slice(0, 30) }));
+      }).catch(() => []);
+      this.logger.warn(`postToOwnTimeline(${pageId}): không tìm thấy nút Đăng. Dialog buttons: ${JSON.stringify(dialogBtns)}`);
+      return false;
+    } catch (e: any) {
+      this.logger.warn(`postToOwnTimeline(${pageId}) lỗi: ${e.message?.slice(0, 100)}`);
+      return false;
+    } finally {
+      await page.close();
+    }
   }
 
   // ─── Grow Fanpage Followers (Playwright-based) ────────────────────────────

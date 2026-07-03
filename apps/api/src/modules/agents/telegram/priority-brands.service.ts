@@ -336,6 +336,11 @@ export class PriorityBrandsService {
     return results;
   }
 
+  // Public: lấy CHỈ sản phẩm Con Cưng (dùng cho campaign riêng, không trộn brand khác)
+  async getConCungProducts(limit = 5): Promise<BrandProduct[]> {
+    return this.scrapeConCung(limit);
+  }
+
   // ConCung: scrape live từ pool URL (JSON-LD có sẵn trên SSR page)
   private async scrapeConCung(limit = 5): Promise<BrandProduct[]> {
     const shuffled = [...CONCUNG_PRODUCT_URLS].sort(() => Math.random() - 0.5);

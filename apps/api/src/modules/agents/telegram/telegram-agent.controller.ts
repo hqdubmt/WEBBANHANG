@@ -6,7 +6,7 @@ import { TelegramAgentService } from './telegram-agent.service';
 import { TelegramBotService } from './telegram-bot.service';
 import { TikTokUploaderService } from './tiktok-uploader.service';
 import { ZaloPersonalService } from './zalo-personal.service';
-import { FacebookGroupsService } from './facebook-groups.service';
+import { FacebookGroupsService, CONCUNG_TARGET_GROUPS_FILE } from './facebook-groups.service';
 import { AiVideoPipelineService } from './ai-video-pipeline.service';
 import { PriorityBrandsService } from './priority-brands.service';
 import { AffiliateTrackerService } from './affiliate-tracker.service';
@@ -371,6 +371,7 @@ export class TelegramAgentController {
     return { groups: this.fbGroups.loadTargetGroups() };
   }
 
+
   @Public()
   @Post('fb-groups/targets/add')
   @ApiOperation({ summary: 'Thêm group vào target list thủ công' })
@@ -393,6 +394,61 @@ export class TelegramAgentController {
   @ApiOperation({ summary: 'Mời người react fanpage posts theo dõi fanpage (Graph API)' })
   async fbGroupsInviteReactors() {
     return this.fbGroups.inviteGroupReactors([]);
+  }
+
+  // ─── Campaign Sale Con Cưng (fanpage riêng, group Mẹ & Bé riêng) ───────────
+
+  @Public()
+  @Get('fb-groups/live-identity')
+  @ApiOperation({ summary: 'Kiểm tra danh tính đang active thực tế trên session (không điều hướng)' })
+  async fbGroupsLiveIdentity() {
+    return this.fbGroups.getLiveIdentity();
+  }
+
+  @Public()
+  @Post('fb-groups/switch-identity')
+  @ApiOperation({ summary: 'Chuyển danh tính active (đăng bài với tư cách) sang 1 Page khác trong cùng session — dùng để khôi phục thủ công nếu cron bị lệch danh tính' })
+  async fbGroupsSwitchIdentity(@Query('pageId') pageId: string) {
+    const ok = await this.fbGroups.switchActiveIdentity(pageId);
+    return { ok };
+  }
+
+  @Public()
+  @Post('fb-groups/concung/scan')
+  @ApiOperation({ summary: 'Quét + auto-join group Mẹ & Bé cho campaign Sale Con Cưng' })
+  async fbGroupsConcungScan(@Query('keywords') keywords?: string) {
+    const kws = keywords
+      ? keywords.split(',').map(s => s.trim()).filter(Boolean)
+      : undefined;
+    return this.svc.runConcungGroupScanAndJoin(kws);
+  }
+
+  @Public()
+  @Get('fb-groups/concung/targets')
+  @ApiOperation({ summary: 'Xem danh sách group Mẹ & Bé đã join cho campaign Con Cưng' })
+  fbGroupsConcungTargets() {
+    return { groups: this.fbGroups.loadTargetGroups(CONCUNG_TARGET_GROUPS_FILE) };
+  }
+
+  @Public()
+  @Post('fb-groups/concung/post')
+  @ApiOperation({ summary: 'Đăng campaign Con Cưng vào group Mẹ & Bé ngay (dùng fanpage Sale Con Cưng)' })
+  async fbGroupsConcungPost(@Query('limit') limit?: string) {
+    return this.svc.runConcungGroupAutoPost(limit ? parseInt(limit) : 10);
+  }
+
+  @Public()
+  @Post('fb-groups/concung/timeline/deal')
+  @ApiOperation({ summary: 'Đăng 1 bài deal Con Cưng lên timeline fanpage Sale Con Cưng ngay' })
+  async fbGroupsConcungTimelineDeal() {
+    return this.svc.runConcungTimelineDealPost();
+  }
+
+  @Public()
+  @Post('fb-groups/concung/timeline/engagement')
+  @ApiOperation({ summary: 'Đăng 1 bài engagement (tips nuôi con) lên timeline fanpage Sale Con Cưng ngay' })
+  async fbGroupsConcungTimelineEngagement() {
+    return this.svc.runConcungTimelineEngagementPost();
   }
 
   @Public()

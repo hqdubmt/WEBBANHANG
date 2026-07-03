@@ -36,3 +36,7 @@ nginx/ssl/*.pem
 
 # Large binaries / codebackup
 codebackup/
+
+# Facebook automation runtime data (chứa cookie/session — không được commit)
+data/fb/fb_session.json
+data/fb/browser_profile/
