@@ -2335,16 +2335,15 @@ export class TelegramAgentService {
     return { sent, groups: records.length };
   }
 
-  // TẠM CHƯA BẬT CRON: tài khoản #2 mới lần đầu dùng Playwright — cần test thủ công qua endpoint
-  // (POST /mypham/group/scan, /mypham/group/post) trước khi tin tưởng bật tự động, tránh lặp lại
-  // sự cố checkpoint/khoá như tài khoản #1 gặp phải ngày đầu dùng.
-  // @Cron('0 3 * * 2,6', { timeZone: 'Asia/Ho_Chi_Minh' })
+  // Scan + join group mỹ phẩm mới — T3 và T7 lúc 3h VN
+  @Cron('0 3 * * 2,6', { timeZone: 'Asia/Ho_Chi_Minh' })
   async runMyPhamGroupScanAndJoinCron() {
     this.logger.log('[CRON] MyPham: Auto-scan & join group mỹ phẩm...');
     await this.runMyPhamGroupScanAndJoin();
   }
 
-  // @Cron('30 7,10,13,16,19,21 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  // Đăng vào group mỹ phẩm — 10 group/lần, 6 lần/ngày
+  @Cron('30 7,10,13,16,19,21 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async runMyPhamGroupAutoPostCron() {
     this.logger.log('[CRON] MyPham: Auto-post vào group mỹ phẩm...');
     await this.runMyPhamGroupAutoPost(10);
