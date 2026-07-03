@@ -2115,6 +2115,65 @@ export class TelegramAgentService {
     await this.runConcungTimelineEngagementPost();
   }
 
+  // ─── Campaign Chuyên Sale Mỹ Phẩm (fanpage riêng, có Page Access Token — dùng Graph API thuần,
+  // KHÔNG cần Playwright/đăng nhập trình duyệt, an toàn & tuân thủ chính sách FB) ────────────────
+
+  private readonly MYPHAM_PAGE_ID = process.env.FACEBOOK_MYPHAM_PAGE_ID || '';
+  private readonly MYPHAM_PAGE_TOKEN = process.env.FACEBOOK_MYPHAM_ACCESS_TOKEN || '';
+
+  private async postToMyPhamTimeline(message: string, link?: string): Promise<string | null> {
+    if (!this.MYPHAM_PAGE_ID || !this.MYPHAM_PAGE_TOKEN) {
+      this.logger.warn('MyPham post: chưa cấu hình FACEBOOK_MYPHAM_PAGE_ID / ACCESS_TOKEN');
+      return null;
+    }
+    try {
+      const res = await axios.post(`https://graph.facebook.com/v19.0/${this.MYPHAM_PAGE_ID}/feed`, null, {
+        params: { message, ...(link ? { link } : {}), access_token: this.MYPHAM_PAGE_TOKEN },
+        timeout: 15000,
+      });
+      const postId = res.data?.id;
+      this.logger.log(`MyPham Graph API OK: post_id=${postId}`);
+      return postId ?? null;
+    } catch (e: any) {
+      this.logger.warn(`MyPham Graph API lỗi: ${e.response?.data?.error?.message || e.message}`);
+      return null;
+    }
+  }
+
+  async runMyPhamTimelineDealPost(): Promise<{ ok: boolean }> {
+    const raw = await this.priorityBrands.getMyPhamProducts(1);
+    if (raw.length === 0) return { ok: false };
+    const p = raw[0];
+    const affiliateLink = this.buildAffiliateLinkSmart(p.url, 'fb');
+    if (!affiliateLink) return { ok: false };
+    const text = this.fanpageContent.buildDealPost({
+      name: p.name, price: p.price, category: p.category,
+      brand: p.brand, discount: p.discount, affiliateLink,
+    });
+    const postId = await this.postToMyPhamTimeline(text, affiliateLink);
+    return { ok: !!postId };
+  }
+
+  async runMyPhamTimelineEngagementPost(): Promise<{ ok: boolean }> {
+    const text = this.fanpageContent.buildEngagementPost('tips_skincare');
+    const postId = await this.postToMyPhamTimeline(text);
+    return { ok: !!postId };
+  }
+
+  // Đăng deal lên timeline Chuyên Sale Mỹ Phẩm — 6 lần/ngày, giống nhịp fanpage chính (lệch phút
+  // :30 so với Con Cưng :15 và fanpage chính :30/:00 để tránh log/API rate trùng thời điểm)
+  @Cron('45 8,12,15,18,20,22 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  async runMyPhamTimelineDealPostCron() {
+    this.logger.log('[CRON] MyPham: đăng deal lên timeline Chuyên Sale Mỹ Phẩm...');
+    await this.runMyPhamTimelineDealPost();
+  }
+
+  @Cron('45 10,19 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  async runMyPhamTimelineEngagementPostCron() {
+    this.logger.log('[CRON] MyPham: đăng engagement post lên timeline Chuyên Sale Mỹ Phẩm...');
+    await this.runMyPhamTimelineEngagementPost();
+  }
+
   private readonly GROUPS_FILE = '/app/fb_data/fb_discovered_groups.json';
   private groupsCache: string[] = [];
 

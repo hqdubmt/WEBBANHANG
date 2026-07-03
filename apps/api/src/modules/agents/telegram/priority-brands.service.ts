@@ -341,6 +341,19 @@ export class PriorityBrandsService {
     return this.scrapeConCung(limit);
   }
 
+  // Public: lấy CHỈ sản phẩm mỹ phẩm/làm đẹp (THEFACESHOP + DHC/Bestme) — dùng cho campaign Chuyên Sale Mỹ Phẩm
+  async getMyPhamProducts(limit = 5): Promise<BrandProduct[]> {
+    const [tfs, bestme] = await Promise.allSettled([
+      this.scrapeTHEFACESHOP(Math.ceil(limit * 0.7)),
+      this.scrapeBestme(Math.ceil(limit * 0.3)),
+    ]);
+    const results = [
+      ...(tfs.status === 'fulfilled' ? tfs.value : []),
+      ...(bestme.status === 'fulfilled' ? bestme.value : []),
+    ];
+    return results.sort(() => Math.random() - 0.5).slice(0, limit);
+  }
+
   // ConCung: scrape live từ pool URL (JSON-LD có sẵn trên SSR page)
   private async scrapeConCung(limit = 5): Promise<BrandProduct[]> {
     const shuffled = [...CONCUNG_PRODUCT_URLS].sort(() => Math.random() - 0.5);

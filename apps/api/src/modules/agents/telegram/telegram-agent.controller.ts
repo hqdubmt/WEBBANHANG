@@ -466,6 +466,20 @@ export class TelegramAgentController {
   }
 
   @Public()
+  @Post('mypham/timeline/deal')
+  @ApiOperation({ summary: 'Đăng 1 bài deal mỹ phẩm lên timeline fanpage Chuyên Sale Mỹ Phẩm ngay (Graph API)' })
+  async myPhamTimelineDeal() {
+    return this.svc.runMyPhamTimelineDealPost();
+  }
+
+  @Public()
+  @Post('mypham/timeline/engagement')
+  @ApiOperation({ summary: 'Đăng 1 bài engagement (tips skincare) lên timeline fanpage Chuyên Sale Mỹ Phẩm ngay (Graph API)' })
+  async myPhamTimelineEngagement() {
+    return this.svc.runMyPhamTimelineEngagementPost();
+  }
+
+  @Public()
   @Post('fb-groups/discover')
   @ApiOperation({ summary: 'Tự động tìm Facebook Groups shopping VN và lưu Redis 7 ngày' })
   async fbGroupsDiscover() {
