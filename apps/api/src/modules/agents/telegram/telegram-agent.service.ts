@@ -2100,9 +2100,8 @@ export class TelegramAgentService {
     return { ok };
   }
 
-  // TẠM TẮT (2026-07-03): trang đang ở giai đoạn xây dựng (build follow) — chỉ đăng nội dung
-  // KHÔNG bán hàng, chưa đăng deal lên timeline. Bật lại khi đã có follow base ổn định.
-  // @Cron('15 8,12,15,18,20,22 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  // Đăng deal lên timeline Sale Con Cưng — giống nhịp fanpage chính, 6 lần/ngày
+  @Cron('15 8,12,15,18,20,22 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async runConcungTimelineDealPostCron() {
     this.logger.log('[CRON] Concung: đăng deal lên timeline Sale Con Cưng...');
     await this.runConcungTimelineDealPost();
