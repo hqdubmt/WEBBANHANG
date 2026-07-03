@@ -2140,6 +2140,26 @@ export class TelegramAgentService {
     }
   }
 
+  // Đăng kèm ảnh branded card (giống fanpage chính) — dùng /photos thay vì /feed
+  private async postToMyPhamTimelineWithImage(message: string, imageUrl: string): Promise<string | null> {
+    if (!this.MYPHAM_PAGE_ID || !this.MYPHAM_PAGE_TOKEN) {
+      this.logger.warn('MyPham post: chưa cấu hình FACEBOOK_MYPHAM_PAGE_ID / ACCESS_TOKEN');
+      return null;
+    }
+    try {
+      const res = await axios.post(`https://graph.facebook.com/v19.0/${this.MYPHAM_PAGE_ID}/photos`, null, {
+        params: { url: imageUrl, caption: message, access_token: this.MYPHAM_PAGE_TOKEN, published: true },
+        timeout: 45000,
+      });
+      const postId = res.data?.post_id || `${this.MYPHAM_PAGE_ID}_${res.data?.id}`;
+      this.logger.log(`MyPham Graph API OK (ảnh): post_id=${postId}`);
+      return postId ?? null;
+    } catch (e: any) {
+      this.logger.warn(`MyPham Graph API (ảnh) lỗi: ${e.response?.data?.error?.message || e.message}`);
+      return null;
+    }
+  }
+
   async runMyPhamTimelineDealPost(): Promise<{ ok: boolean }> {
     const raw = await this.priorityBrands.getMyPhamProducts(1);
     if (raw.length === 0) return { ok: false };
@@ -2150,7 +2170,24 @@ export class TelegramAgentService {
       name: p.name, price: p.price, category: p.category,
       brand: p.brand, discount: p.discount, affiliateLink,
     });
-    const postId = await this.postToMyPhamTimeline(text, affiliateLink);
+
+    // Tạo ảnh branded card giống fanpage chính (fallback về ảnh gốc sản phẩm nếu generate lỗi)
+    const pf = new Intl.NumberFormat('vi-VN').format(p.price) + 'đ';
+    const hook = HOOKS[Math.floor(Math.random() * HOOKS.length)];
+    let imageUrl: string | null = p.image || null;
+    try {
+      const imgBuf = await this.imgGen.generateProductCard({
+        name: p.name, price: pf, category: p.category, imageUrl: p.image, hook, source: 'tiki',
+      });
+      if (imgBuf) {
+        const hosted = await this.uploadToImgbb(imgBuf);
+        if (hosted) imageUrl = hosted;
+      }
+    } catch { /* bỏ qua lỗi generate, dùng ảnh gốc */ }
+
+    const postId = imageUrl
+      ? await this.postToMyPhamTimelineWithImage(text, imageUrl)
+      : await this.postToMyPhamTimeline(text, affiliateLink);
     return { ok: !!postId };
   }
 
@@ -2158,6 +2195,76 @@ export class TelegramAgentService {
     const text = this.fanpageContent.buildEngagementPost('tips_skincare');
     const postId = await this.postToMyPhamTimeline(text);
     return { ok: !!postId };
+  }
+
+  // Bài CTA kêu gọi follow trang — tái dùng nội dung tương tự postFollowerCTA() của fanpage chính
+  async runMyPhamFollowerCTA(): Promise<{ ok: boolean }> {
+    const variants = [
+      {
+        hook: '🔔 BẠN ĐÃ THEO DÕI TRANG CHƯA?',
+        body: 'Mỗi ngày chúng tôi chia sẻ deal mỹ phẩm chính hãng — giảm đến 50%!\n\n✅ Nhấn "Theo dõi" để:\n• Nhận deal sớm nhất trước khi hết hàng\n• Không bỏ lỡ flash sale skincare\n• Tiết kiệm hàng trăm nghìn mỗi tháng',
+      },
+      {
+        hook: '💄 DEAL MỸ PHẨM HOT MỖI NGÀY — MIỄN PHÍ 100%!',
+        body: 'Chúng tôi săn deal mỹ phẩm chính hãng giúp bạn. Bạn chỉ cần:\n\n1️⃣ Nhấn THEO DÕI trang\n2️⃣ Bật thông báo 🔔\n3️⃣ Nhận deal skincare/makeup hot mỗi ngày!',
+      },
+      {
+        hook: '✨ TIẾT KIỆM MỖI NGÀY VỚI DEAL MỸ PHẨM!',
+        body: 'Hàng ngàn người đã theo dõi trang để nhận deal hot hàng ngày.\n\nBạn thì sao? 👇\n\n👉 Nhấn THEO DÕI ngay để không bỏ lỡ!\n📢 Chia sẻ cho bạn bè cùng tiết kiệm nhé!',
+      },
+    ];
+    const v = variants[Math.floor(Math.random() * variants.length)];
+    const message = `${v.hook}\n\n${v.body}\n\n#mypham #skincare #lamde #khuyenmai #beautydeals`;
+    const postId = await this.postToMyPhamTimeline(message);
+    return { ok: !!postId };
+  }
+
+  // Mời người đã like/react bài đăng gần đây follow trang — Graph API thuần, không liên quan group
+  async runMyPhamInviteReactors(): Promise<{ invited: number }> {
+    if (!this.MYPHAM_PAGE_ID || !this.MYPHAM_PAGE_TOKEN) return { invited: 0 };
+    let invited = 0;
+    try {
+      const postsRes = await axios.get(`https://graph.facebook.com/v19.0/${this.MYPHAM_PAGE_ID}/posts`, {
+        params: { fields: 'id', limit: 10, access_token: this.MYPHAM_PAGE_TOKEN },
+        timeout: 10000,
+      });
+      const posts: any[] = postsRes.data?.data || [];
+      for (const post of posts.slice(0, 5)) {
+        try {
+          const reactRes = await axios.get(`https://graph.facebook.com/v19.0/${post.id}/reactions`, {
+            params: { fields: 'id', limit: 50, access_token: this.MYPHAM_PAGE_TOKEN },
+            timeout: 8000,
+          });
+          const reactors: any[] = reactRes.data?.data || [];
+          for (const r of reactors) {
+            try {
+              await axios.post(`https://graph.facebook.com/v19.0/${this.MYPHAM_PAGE_ID}/invited_users`, null, {
+                params: { user: r.id, access_token: this.MYPHAM_PAGE_TOKEN }, timeout: 5000,
+              });
+              invited++;
+            } catch {}
+          }
+        } catch {}
+      }
+    } catch (e: any) {
+      this.logger.debug(`MyPham inviteReactors lỗi: ${e.message?.slice(0, 60)}`);
+    }
+    this.logger.log(`MyPham inviteReactors: đã mời ${invited} người follow trang`);
+    return { invited };
+  }
+
+  // CTA follow trang — 3 lần/tuần, giống nhịp fanpage chính
+  @Cron('0 9 * * 1,3,5')
+  async runMyPhamFollowerCTACron() {
+    this.logger.log('[CRON] MyPham: đăng bài CTA follow trang...');
+    await this.runMyPhamFollowerCTA();
+  }
+
+  // Mời reactor follow trang — mỗi ngày 22h VN, giống nhịp fanpage chính
+  @Cron('0 22 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  async runMyPhamInviteReactorsCron() {
+    this.logger.log('[CRON] MyPham: mời reactor follow trang...');
+    await this.runMyPhamInviteReactors();
   }
 
   // Đăng deal lên timeline Chuyên Sale Mỹ Phẩm — 6 lần/ngày, giống nhịp fanpage chính (lệch phút

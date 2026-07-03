@@ -480,6 +480,20 @@ export class TelegramAgentController {
   }
 
   @Public()
+  @Post('mypham/follower-cta')
+  @ApiOperation({ summary: 'Đăng bài CTA kêu gọi follow trang Chuyên Sale Mỹ Phẩm ngay (Graph API)' })
+  async myPhamFollowerCTA() {
+    return this.svc.runMyPhamFollowerCTA();
+  }
+
+  @Public()
+  @Post('mypham/invite-reactors')
+  @ApiOperation({ summary: 'Mời người đã react bài đăng gần đây follow trang Chuyên Sale Mỹ Phẩm (Graph API)' })
+  async myPhamInviteReactors() {
+    return this.svc.runMyPhamInviteReactors();
+  }
+
+  @Public()
   @Post('fb-groups/discover')
   @ApiOperation({ summary: 'Tự động tìm Facebook Groups shopping VN và lưu Redis 7 ngày' })
   async fbGroupsDiscover() {
