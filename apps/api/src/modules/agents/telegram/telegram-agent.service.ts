@@ -1867,8 +1867,10 @@ export class TelegramAgentService {
     await this.postFollowerCTA();
   }
 
-  // Refresh Facebook session để không bị đăng xuất (mỗi 6h)
-  @Cron('0 */6 * * *')
+  // TẠM TẮT TOÀN BỘ (2026-07-03): tài khoản FB cá nhân đang bị đăng xuất/hạn chế — dừng mọi automation
+  // Playwright để không làm nặng thêm tình trạng khoá. Chỉ bật lại SAU KHI user tự xác minh/mở khoá
+  // tài khoản thủ công qua app/web Facebook.
+  // @Cron('0 */6 * * *')
   async runFbSessionRefresh() {
     await this.fbGroups.refreshSession();
   }
@@ -1887,21 +1889,21 @@ export class TelegramAgentService {
     await this.postToFacebookGroups();
   }
 
-  // Tự động tìm group Facebook mới mỗi thứ 2 lúc 3h sáng VN
-  @Cron('0 3 * * 1')
+  // TẠM TẮT — tài khoản FB đang bị khoá/hạn chế, xem ghi chú ở runFbSessionRefresh phía trên
+  // @Cron('0 3 * * 1')
   async runGroupDiscovery() {
     await this.discoverAndSaveGroups();
   }
 
-  // Auto-scan + join groups mới mỗi thứ 3 và thứ 6 lúc 2h VN
-  @Cron('0 2 * * 2,5', { timeZone: 'Asia/Ho_Chi_Minh' })
+  // TẠM TẮT — tài khoản FB đang bị khoá/hạn chế
+  // @Cron('0 2 * * 2,5', { timeZone: 'Asia/Ho_Chi_Minh' })
   async runAutoScanAndJoin() {
     this.logger.log('[CRON] Auto-scan & join groups mới...');
     await this.runGroupScanAndJoin();
   }
 
-  // Auto-post deal vào target groups — 15 groups/lần, mỗi giờ 1 lần từ 6h đến 22h VN (17 khung giờ/ngày)
-  @Cron('0 6-22 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  // TẠM TẮT — tài khoản FB đang bị khoá/hạn chế
+  // @Cron('0 6-22 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async runTargetGroupAutoPost() {
     this.logger.log('[CRON] Auto-post vào target groups...');
     await this.runGroupAutoPost(15);
@@ -1915,8 +1917,8 @@ export class TelegramAgentService {
   }
 
   // ── Campaign Sale Con Cưng ──
-  // Scan + join group Mẹ & Bé — T4 và CN lúc 3h VN (lệch giờ với scan chính T3/T6 2h, tránh trùng)
-  @Cron('0 3 * * 3,0', { timeZone: 'Asia/Ho_Chi_Minh' })
+  // TẠM TẮT — tài khoản FB đang bị khoá/hạn chế, xem ghi chú ở runFbSessionRefresh phía trên
+  // @Cron('0 3 * * 3,0', { timeZone: 'Asia/Ho_Chi_Minh' })
   async runConcungAutoScanAndJoin() {
     this.logger.log('[CRON] Concung: Auto-scan & join group Mẹ & Bé...');
     await this.runConcungGroupScanAndJoin();
@@ -1953,7 +1955,8 @@ export class TelegramAgentService {
     return result;
   }
 
-  @Cron('30 4 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  // TẠM TẮT — tài khoản FB đang bị khoá/hạn chế
+  // @Cron('30 4 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async runConcungRejoinGroupsCron() {
     this.logger.log('[CRON] Concung: join lại group dưới danh tính Sale Con Cưng...');
     const r = await this.runConcungRejoinGroups(25);
@@ -2109,7 +2112,8 @@ export class TelegramAgentService {
 
   // Giai đoạn xây dựng trang: chỉ đăng nội dung quảng bá/engagement (không bán hàng), 2 lần/ngày
   // lệch phút so với job group Con Cưng (:45) và job group chính (:00) để không chạy chồng
-  @Cron('15 10,19 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  // TẠM TẮT — tài khoản FB đang bị khoá/hạn chế
+  // @Cron('15 10,19 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async runConcungTimelineEngagementPostCron() {
     this.logger.log('[CRON] Concung: đăng engagement post lên timeline Sale Con Cưng...');
     await this.runConcungTimelineEngagementPost();
