@@ -304,10 +304,9 @@ export class TelegramAgentService {
     await this.sendFacebookGroupsContent(5);
   }
 
-  // Đăng bài engagement (poll/tips/relatable) — 3×/tuần để xây follow
-  // Thứ 2/4/6 lúc 9h sáng — giờ reach cao, không xen với deal 8h
-  // Engagement post hàng ngày 9:30 sáng — xây follow bằng nội dung không bán hàng
-  @Cron('30 9 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  // Đăng bài engagement (poll/tips/relatable) — nội dung KHÔNG bán hàng, chỉ để quảng bá/xây follow
+  // cho trang. 2 lần/ngày: 9h30 sáng (giờ reach cao) và 19h tối (giờ vàng buổi tối)
+  @Cron('30 9,19 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async runFanpageEngagementPost() {
     const pageId    = process.env.FACEBOOK_PAGE_ID;
     const pageToken = process.env.FACEBOOK_ACCESS_TOKEN;
@@ -2100,15 +2099,17 @@ export class TelegramAgentService {
     return { ok };
   }
 
-  // Cron riêng cho timeline Sale Con Cưng — giống nhịp fanpage chính (6 deal + 1 engagement/ngày),
-  // lệch phút so với job group Con Cưng (:45) và job group chính (:00) để không chạy chồng
-  @Cron('15 8,12,15,18,20,22 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  // TẠM TẮT (2026-07-03): trang đang ở giai đoạn xây dựng (build follow) — chỉ đăng nội dung
+  // KHÔNG bán hàng, chưa đăng deal lên timeline. Bật lại khi đã có follow base ổn định.
+  // @Cron('15 8,12,15,18,20,22 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async runConcungTimelineDealPostCron() {
     this.logger.log('[CRON] Concung: đăng deal lên timeline Sale Con Cưng...');
     await this.runConcungTimelineDealPost();
   }
 
-  @Cron('15 10 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  // Giai đoạn xây dựng trang: chỉ đăng nội dung quảng bá/engagement (không bán hàng), 2 lần/ngày
+  // lệch phút so với job group Con Cưng (:45) và job group chính (:00) để không chạy chồng
+  @Cron('15 10,19 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async runConcungTimelineEngagementPostCron() {
     this.logger.log('[CRON] Concung: đăng engagement post lên timeline Sale Con Cưng...');
     await this.runConcungTimelineEngagementPost();
